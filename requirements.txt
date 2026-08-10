@@ -10,7 +10,4 @@ tensorflow
 numpy
 opencv-python-headless
 Pillow
-fpdf2
 scikit-learn
-installer returned a non-zero exit code
-Error during processing dependencies!
