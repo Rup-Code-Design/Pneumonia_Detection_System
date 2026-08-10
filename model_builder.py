@@ -145,10 +145,10 @@ if __name__ == "__main__":
     # ==========================================
     # SETTINGS
     # ==========================================
-     D:\Thesis Pnemonia\Pneumonia_App
-     IMG_SIZE     = (128, 128)   # Reduced from 224 → faster
-     BATCH_SIZE   = 32          # Increased from 32 → better GPU usage
-     EPOCHS       = 70         # EarlyStopping will stop earlier if needed
+    D:\Thesis Pnemonia\Pneumonia_App
+    IMG_SIZE     = (128, 128)   # Reduced from 224 → faster
+    BATCH_SIZE   = 32          # Increased from 32 → better GPU usage
+    EPOCHS       = 70         # EarlyStopping will stop earlier if needed
 
     # ─────────────────────────────────────────────────────────────────
     # Expected folder structure:
