@@ -266,216 +266,274 @@ if uploaded_file is not None:
                     st.stop()
 
 
-                # ==================================================
-                # STEP 2 — X-RAY VERIFICATION
-                # ==================================================
+               # ==================================================
+# STEP 2 — IMAGE TYPE VALIDATION
+# ==================================================
 
-                st.subheader("Step 1 — Chest X-ray Verification")
-
-
-                # Resize exactly as used by verifier
-                verifier_image = cv2.resize(
-                    image_array,
-                    XRAY_IMAGE_SIZE,
-                    interpolation=cv2.INTER_AREA
-                )
+st.subheader("Step 1 — Chest X-ray Verification")
 
 
-                # Convert to float32
-                verifier_image = (
-                    verifier_image.astype(
-                        np.float32
-                    ) / 255.0
-                )
+# --------------------------------------------------
+# CHECK WHETHER IMAGE IS ACTUALLY COLOR
+# --------------------------------------------------
+
+# The uploaded image has already been converted to RGB.
+# Compare the RGB channels. A genuine grayscale chest
+# X-ray should have very similar R, G and B values.
+
+rgb_image = image_array.astype(np.float32)
+
+red_channel = rgb_image[:, :, 0]
+green_channel = rgb_image[:, :, 1]
+blue_channel = rgb_image[:, :, 2]
+
+channel_difference = (
+    np.mean(np.abs(red_channel - green_channel))
+    +
+    np.mean(np.abs(green_channel - blue_channel))
+    +
+    np.mean(np.abs(red_channel - blue_channel))
+) / 3.0
 
 
-                # Add batch dimension
-                verifier_input = np.expand_dims(
-                    verifier_image,
-                    axis=0
-                )
+# --------------------------------------------------
+# REJECT COLOR IMAGES
+# --------------------------------------------------
+
+if channel_difference > COLOR_TOLERANCE:
+
+    st.error(
+        "❌ This is not a Chest X-ray image."
+    )
+
+    st.warning(
+        "Color images are not accepted. "
+        "Please upload a grayscale chest X-ray."
+    )
+
+    history_entry = (
+        f"Rejected - Color image - "
+        f"{uploaded_file.name}"
+    )
+
+    if (
+        history_entry
+        not in st.session_state.history
+    ):
+
+        st.session_state.history.append(
+            history_entry
+        )
+
+    st.stop()
 
 
-                # --------------------------------------------------
-                # RUN VERIFIER
-                # --------------------------------------------------
+# ==================================================
+# STEP 3 — X-RAY VERIFIER MODEL
+# ==================================================
 
-                verifier_prediction = xray_model.predict(
-                    verifier_input,
-                    verbose=0
-                )
+# Resize image for the X-ray verifier
 
-
-                verifier_prediction = np.asarray(
-                    verifier_prediction
-                )
+verifier_image = cv2.resize(
+    image_array,
+    XRAY_IMAGE_SIZE,
+    interpolation=cv2.INTER_AREA
+)
 
 
-                # --------------------------------------------------
-                # CHECK VERIFIER OUTPUT
-                # --------------------------------------------------
+# --------------------------------------------------
+# CONVERT TO FLOAT
+# --------------------------------------------------
 
-                if verifier_prediction.ndim != 2:
-
-                    st.error(
-                        "Invalid X-ray verifier output."
-                    )
-
-                    st.write(
-                        "Verifier output:",
-                        verifier_prediction
-                    )
-
-                    st.stop()
+verifier_image = (
+    verifier_image.astype(
+        np.float32
+    ) / 255.0
+)
 
 
-                if verifier_prediction.shape[1] != 2:
+# --------------------------------------------------
+# ADD BATCH DIMENSION
+# --------------------------------------------------
 
-                    st.error(
-                        "The X-ray verifier must have "
-                        "2 output classes."
-                    )
-
-                    st.write(
-                        "Verifier output shape:",
-                        verifier_prediction.shape
-                    )
-
-                    st.stop()
+verifier_input = np.expand_dims(
+    verifier_image,
+    axis=0
+)
 
 
-                # --------------------------------------------------
-                # GET RAW OUTPUT
-                # --------------------------------------------------
+# --------------------------------------------------
+# RUN X-RAY VERIFIER
+# --------------------------------------------------
 
-                raw_scores = (
-                    verifier_prediction[0]
-                    .astype(np.float64)
-                )
-
-
-                # --------------------------------------------------
-                # CONVERT OUTPUT TO PROBABILITIES
-                # --------------------------------------------------
-
-                # If outputs are already probabilities:
-                if (
-                    np.all(raw_scores >= 0.0)
-                    and
-                    np.all(raw_scores <= 1.0)
-                    and
-                    np.isclose(
-                        np.sum(raw_scores),
-                        1.0,
-                        atol=1e-3
-                    )
-                ):
-
-                    verifier_probabilities = raw_scores
-
-                else:
-
-                    # If model outputs logits
-                    verifier_probabilities = (
-                        tf.nn.softmax(
-                            raw_scores
-                        ).numpy()
-                    )
+verifier_prediction = xray_model.predict(
+    verifier_input,
+    verbose=0
+)
 
 
-                # --------------------------------------------------
-                # GET PREDICTED CLASS
-                # --------------------------------------------------
-
-                verifier_class_index = int(
-                    np.argmax(
-                        verifier_probabilities
-                    )
-                )
+verifier_prediction = np.asarray(
+    verifier_prediction
+)
 
 
-                verifier_confidence = float(
-                    verifier_probabilities[
-                        verifier_class_index
-                    ]
-                )
+# --------------------------------------------------
+# VALIDATE VERIFIER OUTPUT
+# --------------------------------------------------
+
+if (
+    verifier_prediction.ndim != 2
+    or verifier_prediction.shape[1] != 2
+):
+
+    st.error(
+        "Unable to verify the image type."
+    )
+
+    st.stop()
 
 
-                verifier_result = XRAY_CLASS_MAP.get(
-                    verifier_class_index,
-                    "UNKNOWN"
-                )
+# --------------------------------------------------
+# GET VERIFIER SCORES
+# --------------------------------------------------
+
+raw_scores = (
+    verifier_prediction[0]
+    .astype(np.float64)
+)
 
 
-                # --------------------------------------------------
-                # DEBUG INFORMATION
-                # --------------------------------------------------
+# --------------------------------------------------
+# CONVERT TO PROBABILITIES
+# --------------------------------------------------
 
-                with st.expander(
-                    "Verifier technical details"
-                ):
+if (
+    np.all(raw_scores >= 0.0)
+    and
+    np.all(raw_scores <= 1.0)
+    and
+    np.isclose(
+        np.sum(raw_scores),
+        1.0,
+        atol=1e-3
+    )
+):
 
-                    st.write(
-                        "Raw verifier output:",
-                        raw_scores
-                    )
+    verifier_probabilities = raw_scores
 
-                    st.write(
-                        "Verifier probabilities:",
-                        verifier_probabilities
-                    )
+else:
 
-                    st.write(
-                        "Predicted class index:",
-                        verifier_class_index
-                    )
-
-                    st.write(
-                        "Predicted class:",
-                        verifier_result
-                    )
+    verifier_probabilities = (
+        tf.nn.softmax(
+            raw_scores
+        ).numpy()
+    )
 
 
-                # ==================================================
-                # STEP 3 — REJECT NON-X-RAY
-                # ==================================================
+# --------------------------------------------------
+# GET PREDICTED CLASS
+# --------------------------------------------------
 
-                if verifier_result == "NON-XRAY":
-
-                    st.error(
-                        "❌ This is not a Chest X-ray image."
-                    )
-
-                    st.write(
-                        "Verifier confidence: "
-                        f"{verifier_confidence * 100:.2f}%"
-                    )
-
-                    st.warning(
-                        "Please upload a valid chest X-ray image."
-                    )
+verifier_class_index = int(
+    np.argmax(
+        verifier_probabilities
+    )
+)
 
 
-                    # History
-                    history_entry = (
-                        f"Rejected - "
-                        f"{uploaded_file.name}"
-                    )
-
-                    if (
-                        history_entry
-                        not in st.session_state.history
-                    ):
-
-                        st.session_state.history.append(
-                            history_entry
-                        )
+verifier_confidence = float(
+    verifier_probabilities[
+        verifier_class_index
+    ]
+)
 
 
-                    st.stop()
+verifier_result = XRAY_CLASS_MAP.get(
+    verifier_class_index,
+    "UNKNOWN"
+)
 
 
-                # ==================================================
+# ==================================================
+# REJECT NON-X-RAY
+# ==================================================
+
+if (
+    verifier_result != "X-RAY"
+    or
+    verifier_confidence < XRAY_CONFIDENCE_THRESHOLD
+):
+
+    st.error(
+        "❌ This is not a Chest X-ray image."
+    )
+
+    st.warning(
+        "Please upload a valid chest X-ray image."
+    )
+
+    history_entry = (
+        f"Rejected - Non-X-ray - "
+        f"{uploaded_file.name}"
+    )
+
+    if (
+        history_entry
+        not in st.session_state.history
+    ):
+
+        st.session_state.history.append(
+            history_entry
+        )
+
+    st.stop()
+
+
+# ==================================================
+# X-RAY CONFIRMED
+# ==================================================
+
+st.success(
+    "✅ Chest X-ray image detected."
+)
+
+
+st.write(
+    f"X-ray verification confidence: "
+    f"{verifier_confidence * 100:.2f}%"
+)
+
+
+# --------------------------------------------------
+# X-RAY PROBABILITIES
+# --------------------------------------------------
+
+xray_probability = float(
+    verifier_probabilities[0]
+)
+
+non_xray_probability = float(
+    verifier_probabilities[1]
+)
+
+
+col1, col2 = st.columns(2)
+
+
+with col1:
+
+    st.metric(
+        "Chest X-ray Probability",
+        f"{xray_probability * 100:.2f}%"
+    )
+
+
+with col2:
+
+    st.metric(
+        "Non-X-ray Probability",
+        f"{non_xray_probability * 100:.2f}%"
+    )                # ==================================================
                 # STEP 4 — X-RAY CONFIRMED
                 # ==================================================
 
