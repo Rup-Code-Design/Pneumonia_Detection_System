@@ -9,8 +9,8 @@ Original file is located at
 
 # IMPORTANT: SOME KAGGLE DATA SOURCES ARE PRIVATE
 # RUN THIS CELL IN ORDER TO IMPORT YOUR KAGGLE DATA SOURCES.
-import kagglehub
-kagglehub.login()
+# import kagglehub
+# kagglehub.login()
 
 # IMPORTANT: RUN THIS CELL IN ORDER TO IMPORT YOUR KAGGLE DATA SOURCES,
 # THEN FEEL FREE TO DELETE THIS CELL.
@@ -18,8 +18,8 @@ kagglehub.login()
 # ENVIRONMENT SO THERE MAY BE MISSING LIBRARIES USED BY YOUR
 # NOTEBOOK.
 
-rupdasgupta_pneumonia_no_preprocessed_path = kagglehub.dataset_download('rupdasgupta/pneumonia-no-preprocessed')
-rupdasgupta_indian_uav_path = kagglehub.dataset_download('rupdasgupta/indian-uav')
+# rupdasgupta_pneumonia_no_preprocessed_path = kagglehub.dataset_download('rupdasgupta/pneumonia-no-preprocessed')
+# rupdasgupta_indian_uav_path = kagglehub.dataset_download('rupdasgupta/indian-uav')
 
 print('Data source import complete.')
 
