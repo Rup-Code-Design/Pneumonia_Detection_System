@@ -120,7 +120,7 @@ def load_pneumonia_model():
 
     model = build_model(
         input_shape=(224, 224, 3),
-        num_classes=1
+        num_classes=2
     )
 
     model.load_weights(
