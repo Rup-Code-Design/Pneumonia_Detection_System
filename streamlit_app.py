@@ -1,4 +1,3 @@
-```python
 import os
 import io
 
@@ -1059,4 +1058,3 @@ if uploaded_file is not None:
         )
 
         st.exception(e)
-```
