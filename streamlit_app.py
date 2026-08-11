@@ -44,26 +44,6 @@ PNEUMONIA_IMAGE_SIZE = (224, 224)
 # ============================================================
 # X-RAY VERIFIER CLASS MAPPING
 # ============================================================
-#
-# IMPORTANT:
-#
-# Check the output from your Kaggle training:
-#
-# print(train_generator.class_indices)
-#
-# If it was:
-#
-# {'NON_XRAY': 0, 'XRAY': 1}
-#
-# use the mapping below.
-#
-# If it was:
-#
-# {'XRAY': 0, 'NON_XRAY': 1}
-#
-# change it accordingly.
-#
-# ============================================================
 
 XRAY_CLASS_MAP = {
     0: "NON-XRAY",
@@ -119,8 +99,7 @@ def load_pneumonia_model():
         )
 
     model = build_model(
-        input_shape=(224, 224, 3),
-        
+        input_shape=(224, 224, 3)
     )
 
     model.load_weights(
@@ -138,7 +117,7 @@ try:
 
     xray_model = load_xray_model()
 
-    pneumonia_model = load_pneumonia_model()  
+    pneumonia_model = load_pneumonia_model()
 
 except Exception as e:
 
@@ -147,6 +126,7 @@ except Exception as e:
     st.exception(e)
 
     st.stop()
+
 
 # ============================================================
 # HEADER
@@ -412,59 +392,54 @@ if uploaded_file is not None:
                     axis=0
                 )
 
-               # ==================================================
-# STEP 6 — PNEUMONIA PREDICTION
-# ==================================================
+                # ==================================================
+                # STEP 6 — PNEUMONIA PREDICTION
+                # ==================================================
 
-prediction = pneumonia_model.predict(
-    pneumonia_input,
-    verbose=0
-)
+                prediction = pneumonia_model.predict(
+                    pneumonia_input,
+                    verbose=0
+                )
 
-prediction = np.asarray(prediction)
+                prediction = np.asarray(prediction)
 
-# --------------------------------------------------
-# EXPECTED OUTPUT FOR 2-CLASS SOFTMAX:
-# [[normal_prob, pneumonia_prob]]
-# --------------------------------------------------
+                if prediction.ndim != 2 or prediction.shape[1] != 2:
 
-if prediction.ndim != 2 or prediction.shape[1] != 2:
+                    st.error(
+                        "Pneumonia model output is not "
+                        "configured as a 2-class classifier."
+                    )
 
-    st.error(
-        "Pneumonia model output is not "
-        "configured as a 2-class classifier."
-    )
+                    st.write(
+                        "Model output shape:",
+                        prediction.shape
+                    )
 
-    st.write(
-        "Model output shape:",
-        prediction.shape
-    )
+                    st.stop()
 
-    st.stop()
+                normal_probability = float(prediction[0][0])
+                pneumonia_probability = float(prediction[0][1])
 
-# Class 0 = Normal, Class 1 = Pneumonia
-normal_probability = float(prediction[0][0])
-pneumonia_probability = float(prediction[0][1])
+                # --------------------------------------------------
+                # SAFETY CLAMP
+                # --------------------------------------------------
 
-# --------------------------------------------------
-# SAFETY CLAMP
-# --------------------------------------------------
+                pneumonia_probability = float(
+                    np.clip(
+                        pneumonia_probability,
+                        0.0,
+                        1.0
+                    )
+                )
 
-pneumonia_probability = float(
-    np.clip(
-        pneumonia_probability,
-        0.0,
-        1.0
-    )
-)
+                normal_probability = float(
+                    np.clip(
+                        normal_probability,
+                        0.0,
+                        1.0
+                    )
+                )
 
-normal_probability = float(
-    np.clip(
-        normal_probability,
-        0.0,
-        1.0
-    )
-)
                 # ==================================================
                 # STEP 7 — CLASSIFICATION
                 # ==================================================
