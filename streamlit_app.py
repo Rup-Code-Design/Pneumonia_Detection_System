@@ -29,7 +29,7 @@ st.set_page_config(
 
 XRAY_MODEL_PATH = "best_xray_verifier.weights.h5"
 
-PNEUMONIA_MODEL_PATH = "best_xception_model.keras"
+PNEUMONIA_MODEL_PATH = "best_xception_pneumonia_model.keras"
 
 
 # ============================================================
