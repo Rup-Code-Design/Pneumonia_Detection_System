@@ -138,7 +138,7 @@ try:
 
     xray_model = load_xray_model()
 
-    pneumonia_model = best_xception_pneumonia_model.keras()
+    pneumonia_model = load_pneumonia_model()
 
 except Exception as e:
 
