@@ -43,18 +43,14 @@ from sklearn.model_selection import train_test_split
 # Your chest X-ray dataset
 # ------------------------------------------------------------
 
-XRAY_SOURCE = (
-    "/kaggle/input/datasets/rupdasgupta/pneumonia-no-preprocessed/Pnemonia_No_Preprocessed"
-)
+# XRAY_SOURCE = (  "/kaggle/input/datasets/rupdasgupta/pneumonia-no-preprocessed/Pnemonia_No_Preprocessed")
 
 
 # ------------------------------------------------------------
 # Your non-X-ray dataset
 # ------------------------------------------------------------
 
-NON_XRAY_SOURCE = (
-    "/kaggle/input/datasets/rupdasgupta/indian-uav/INDIAN_UAV"
-)
+# NON_XRAY_SOURCE = ( "/kaggle/input/datasets/rupdasgupta/indian-uav/INDIAN_UAV")
 
 
 # ------------------------------------------------------------
