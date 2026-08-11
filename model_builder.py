@@ -1,5 +1,5 @@
 # ============================================================
-# model_builder.py
+# pneumonia_model_builder.py
 # Pneumonia Detection Model Architecture
 # ============================================================
 
@@ -82,8 +82,8 @@ def xception_block(
     # --------------------------------------------------------
 
     x = layers.SeparableConv2D(
-        filters,
-        3,
+        filters=filters,
+        kernel_size=3,
         padding="same",
         use_bias=False
     )(x)
@@ -99,8 +99,8 @@ def xception_block(
     # --------------------------------------------------------
 
     x = layers.SeparableConv2D(
-        filters,
-        3,
+        filters=filters,
+        kernel_size=3,
         padding="same",
         use_bias=False
     )(x)
@@ -114,13 +114,15 @@ def xception_block(
     if shortcut.shape[-1] != filters:
 
         shortcut = layers.Conv2D(
-            filters,
-            1,
+            filters=filters,
+            kernel_size=1,
             padding="same",
             use_bias=False
         )(shortcut)
 
-        shortcut = layers.BatchNormalization()(shortcut)
+        shortcut = layers.BatchNormalization()(
+            shortcut
+        )
 
     # --------------------------------------------------------
     # Residual addition
@@ -161,7 +163,7 @@ def residual_block(
     x = conv_block(
         x,
         filters,
-        3
+        kernel_size=3
     )
 
     # --------------------------------------------------------
@@ -171,7 +173,7 @@ def residual_block(
     x = conv_block(
         x,
         filters,
-        3
+        kernel_size=3
     )
 
     # --------------------------------------------------------
@@ -181,13 +183,15 @@ def residual_block(
     if shortcut.shape[-1] != filters:
 
         shortcut = layers.Conv2D(
-            filters,
-            1,
+            filters=filters,
+            kernel_size=1,
             padding="same",
             use_bias=False
         )(shortcut)
 
-        shortcut = layers.BatchNormalization()(shortcut)
+        shortcut = layers.BatchNormalization()(
+            shortcut
+        )
 
     # --------------------------------------------------------
     # Residual addition
@@ -209,8 +213,7 @@ def residual_block(
 # ============================================================
 
 def build_model(
-    input_shape=(224, 224, 3),
-    num_classes=1
+    input_shape=(224, 224, 3)
 ):
 
     inputs = Input(
@@ -225,7 +228,7 @@ def build_model(
     x = conv_block(
         inputs,
         16,
-        3
+        kernel_size=3
     )
 
     x = layers.MaxPooling2D(
@@ -298,29 +301,18 @@ def build_model(
     )(x)
 
     # ========================================================
-    # OUTPUT
+    # BINARY PNEUMONIA OUTPUT
+    #
+    # 0 = Normal
+    # 1 = Pneumonia
     # ========================================================
 
-    if num_classes == 1:
-
-        # Binary classification:
-        # 0 = Normal
-        # 1 = Pneumonia
-
-        outputs = layers.Dense(
-            1,
-            activation="sigmoid",
-            dtype="float32",
-            name="pneumonia_probability"
-        )(x)
-
-    else:
-
-        outputs = layers.Dense(
-            num_classes,
-            activation="softmax",
-            dtype="float32"
-        )(x)
+    outputs = layers.Dense(
+        1,
+        activation="sigmoid",
+        dtype="float32",
+        name="pneumonia_probability"
+    )(x)
 
     # ========================================================
     # MODEL
@@ -333,3 +325,4 @@ def build_model(
     )
 
     return model
+```
