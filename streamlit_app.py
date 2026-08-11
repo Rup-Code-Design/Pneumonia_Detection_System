@@ -519,183 +519,216 @@ if uploaded_file is not None:
                     )
 
 
-                # ==================================================
-                # STEP 5 — PNEUMONIA DETECTION
-                # ==================================================
+                            # ==================================================
+            # STEP 5 — PNEUMONIA DETECTION
+            # ==================================================
 
-                st.subheader(
-                    "Step 2 — Pneumonia Detection"
+            st.subheader(
+                "Step 2 — Pneumonia Detection"
+            )
+
+            # --------------------------------------------------
+            # PREPARE PNEUMONIA MODEL INPUT
+            # --------------------------------------------------
+
+            pneumonia_image = cv2.resize(
+                image_array,
+                PNEUMONIA_IMAGE_SIZE,
+                interpolation=cv2.INTER_AREA
+            )
+
+            pneumonia_image = (
+                pneumonia_image.astype(
+                    np.float32
+                ) / 255.0
+            )
+
+            pneumonia_input = np.expand_dims(
+                pneumonia_image,
+                axis=0
+            )
+
+            # --------------------------------------------------
+            # RUN PNEUMONIA MODEL
+            # --------------------------------------------------
+
+            prediction = pneumonia_model.predict(
+                pneumonia_input,
+                verbose=0
+            )
+
+            prediction = np.asarray(
+                prediction
+            )
+
+            # ==================================================
+            # STEP 6 — PROCESS 2-CLASS OUTPUT
+            # ==================================================
+
+            # Expected model output:
+            #
+            # Class 0 = Normal
+            # Class 1 = Pneumonia
+            #
+            # Example:
+            # [0.8138, 0.1862]
+            #
+            # Normal     = 81.38%
+            # Pneumonia  = 18.62%
+
+            if (
+                prediction.ndim != 2
+                or prediction.shape[1] != 2
+            ):
+
+                st.error(
+                    "Unable to process the pneumonia prediction."
                 )
 
+                st.stop()
 
-                # --------------------------------------------------
-                # PREPARE PNEUMONIA INPUT
-                # --------------------------------------------------
+            # --------------------------------------------------
+            # GET MODEL SCORES
+            # --------------------------------------------------
 
-                pneumonia_image = cv2.resize(
-                    image_array,
-                    PNEUMONIA_IMAGE_SIZE,
-                    interpolation=cv2.INTER_AREA
+            pneumonia_scores = (
+                prediction[0].astype(np.float64)
+            )
+
+            # --------------------------------------------------
+            # CONVERT LOGITS TO PROBABILITIES IF NECESSARY
+            # --------------------------------------------------
+
+            if (
+                np.all(pneumonia_scores >= 0.0)
+                and
+                np.all(pneumonia_scores <= 1.0)
+                and
+                np.isclose(
+                    np.sum(pneumonia_scores),
+                    1.0,
+                    atol=1e-3
+                )
+            ):
+
+                pneumonia_probabilities = (
+                    pneumonia_scores
                 )
 
+            else:
 
-                pneumonia_image = (
-                    pneumonia_image.astype(
-                        np.float32
-                    ) / 255.0
+                pneumonia_probabilities = (
+                    tf.nn.softmax(
+                        pneumonia_scores
+                    ).numpy()
                 )
 
+            # --------------------------------------------------
+            # CLASS MAPPING
+            # --------------------------------------------------
+            #
+            # 0 = Normal
+            # 1 = Pneumonia
+            #
+            # --------------------------------------------------
 
-                pneumonia_input = np.expand_dims(
-                    pneumonia_image,
-                    axis=0
-                )
+            normal_probability = float(
+                pneumonia_probabilities[0]
+            )
 
+            pneumonia_probability = float(
+                pneumonia_probabilities[1]
+            )
 
-                # --------------------------------------------------
-                # RUN PNEUMONIA MODEL
-                # --------------------------------------------------
+            # ==================================================
+            # STEP 7 — FINAL DIAGNOSIS
+            # ==================================================
 
-                prediction = pneumonia_model.predict(
-                    pneumonia_input,
-                    verbose=0
-                )
+            if (
+                pneumonia_probability
+                >= normal_probability
+            ):
 
+                diagnosis = "Pneumonia"
 
-                prediction = np.asarray(
-                    prediction
-                )
-
-
-                # --------------------------------------------------
-                # CHECK PNEUMONIA OUTPUT
-                # --------------------------------------------------
-
-                if prediction.size != 1:
-
-                    st.error(
-                        "Pneumonia model output is not "
-                        "configured as a single sigmoid output."
-                    )
-
-                    st.write(
-                        "Model output:",
-                        prediction
-                    )
-
-                    st.write(
-                        "Model output shape:",
-                        prediction.shape
-                    )
-
-                    st.stop()
-
-
-                # --------------------------------------------------
-                # PNEUMONIA PROBABILITY
-                # --------------------------------------------------
-
-                pneumonia_probability = float(
-                    np.squeeze(prediction)
-                )
-
-
-                # --------------------------------------------------
-                # SAFETY CLAMP
-                # --------------------------------------------------
-
-                pneumonia_probability = float(
-                    np.clip(
-                        pneumonia_probability,
-                        0.0,
-                        1.0
-                    )
-                )
-
-
-                normal_probability = (
-                    1.0 -
+                diagnosis_confidence = (
                     pneumonia_probability
                 )
 
+            else:
 
-                # ==================================================
-                # STEP 6 — DIAGNOSIS
-                # ==================================================
+                diagnosis = "Normal"
 
-                if pneumonia_probability >= 0.5:
-
-                    diagnosis = "Pneumonia"
-
-                    diagnosis_confidence = (
-                        pneumonia_probability
-                    )
-
-                    st.error(
-                        "Diagnosis: Pneumonia"
-                    )
-
-                else:
-
-                    diagnosis = "Normal"
-
-                    diagnosis_confidence = (
-                        normal_probability
-                    )
-
-                    st.success(
-                        "Diagnosis: Normal"
-                    )
-
-
-                # ==================================================
-                # STEP 7 — RESULTS
-                # ==================================================
-
-                st.subheader(
-                    "Final Result"
+                diagnosis_confidence = (
+                    normal_probability
                 )
 
+            # --------------------------------------------------
+            # DISPLAY DIAGNOSIS
+            # --------------------------------------------------
 
-                col1, col2, col3 = st.columns(3)
+            if diagnosis == "Pneumonia":
 
-
-                with col1:
-
-                    st.metric(
-                        "X-ray Confidence",
-                        f"{verifier_confidence * 100:.2f}%"
-                    )
-
-
-                with col2:
-
-                    st.metric(
-                        "Normal Probability",
-                        f"{normal_probability * 100:.2f}%"
-                    )
-
-
-                with col3:
-
-                    st.metric(
-                        "Pneumonia Probability",
-                        f"{pneumonia_probability * 100:.2f}%"
-                    )
-
-
-                st.write(
-                    f"**Final Diagnosis:** {diagnosis}"
+                st.error(
+                    "Diagnosis: Pneumonia"
                 )
 
+            else:
 
-                st.write(
-                    f"**Diagnosis Confidence:** "
-                    f"{diagnosis_confidence * 100:.2f}%"
+                st.success(
+                    "Diagnosis: Normal"
                 )
 
+            # --------------------------------------------------
+            # FINAL RESULT
+            # --------------------------------------------------
 
-                # ==================================================
+            st.subheader(
+                "Final Result"
+            )
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.metric(
+                    "Normal",
+                    f"{normal_probability * 100:.2f}%"
+                )
+
+            with col2:
+
+                st.metric(
+                    "Pneumonia",
+                    f"{pneumonia_probability * 100:.2f}%"
+                )
+
+            st.write(
+                f"**Final Diagnosis:** {diagnosis}"
+            )
+
+            st.write(
+                f"**Diagnosis Confidence:** "
+                f"{diagnosis_confidence * 100:.2f}%"
+            )
+
+            # ==================================================
+            # HISTORY
+            # ==================================================
+
+            history_entry = (
+                f"{diagnosis} - "
+                f"{uploaded_file.name}"
+            )
+
+            if (
+                history_entry
+                not in st.session_state.history
+            ):
+
+                st.session_state.history.append(
+                    history_entry
+                )                # ==================================================
                 # STEP 8 — HISTORY
                 # ==================================================
 
