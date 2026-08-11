@@ -18,7 +18,7 @@ Original file is located at
 # ENVIRONMENT SO THERE MAY BE MISSING LIBRARIES USED BY YOUR
 # NOTEBOOK.
 
-rupdasgupta_pneumonia_no_preprocessed_path = kagglehub.dataset_download('rupdasgupta/pneumonia-no-preprocessed')
+# rupdasgupta_pneumonia_no_preprocessed_path = kagglehub.dataset_download('rupdasgupta/pneumonia-no-preprocessed')
 
 print('Data source import complete.')
 
