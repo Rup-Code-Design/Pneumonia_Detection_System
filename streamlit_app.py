@@ -205,13 +205,13 @@ print("\n" + "=" * 70)
 print("SETTINGS")
 print("=" * 70)
 
-print(f"Dataset:       {DATASET_PATH}")
-print(f"Output:        {OUTPUT_PATH}")
-print(f"Image size:    {IMG_SIZE}")
-print(f"Batch size:    {BATCH_SIZE}")
-print(f"Epochs:        {EPOCHS}")
-print(f"Classes:       {CLASSES}")
-print(f"Num classes:   {NUM_CLASSES}")
+# print(f"Dataset:       {DATASET_PATH}")
+# print(f"Output:        {OUTPUT_PATH}")
+# print(f"Image size:    {IMG_SIZE}")
+# print(f"Batch size:    {BATCH_SIZE}")
+# print(f"Epochs:        {EPOCHS}")
+# print(f"Classes:       {CLASSES}")
+# print(f"Num classes:   {NUM_CLASSES}")
 
 
 # ============================================================
