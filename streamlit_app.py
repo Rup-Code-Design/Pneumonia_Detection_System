@@ -412,63 +412,59 @@ if uploaded_file is not None:
                     axis=0
                 )
 
-                # ==================================================
-                # STEP 6 — PNEUMONIA PREDICTION
-                # ==================================================
+               # ==================================================
+# STEP 6 — PNEUMONIA PREDICTION
+# ==================================================
 
-                prediction = (
-                    pneumonia_model.predict(
-                        pneumonia_input,
-                        verbose=0
-                    )
-                )
+prediction = pneumonia_model.predict(
+    pneumonia_input,
+    verbose=0
+)
 
-                prediction = np.asarray(
-                    prediction
-                )
+prediction = np.asarray(prediction)
 
-                # --------------------------------------------------
-                # EXPECTED OUTPUT:
-                #
-                # [[0.73]]
-                #
-                # sigmoid probability
-                # --------------------------------------------------
+# --------------------------------------------------
+# EXPECTED OUTPUT FOR 2-CLASS SOFTMAX:
+# [[normal_prob, pneumonia_prob]]
+# --------------------------------------------------
 
-                if prediction.size != 1:
+if prediction.ndim != 2 or prediction.shape[1] != 2:
 
-                    st.error(
-                        "Pneumonia model output is not "
-                        "configured as a single sigmoid output."
-                    )
+    st.error(
+        "Pneumonia model output is not "
+        "configured as a 2-class classifier."
+    )
 
-                    st.write(
-                        "Model output shape:",
-                        prediction.shape
-                    )
+    st.write(
+        "Model output shape:",
+        prediction.shape
+    )
 
-                    st.stop()
+    st.stop()
 
-                pneumonia_probability = float(
-                    np.squeeze(prediction)
-                )
+# Class 0 = Normal, Class 1 = Pneumonia
+normal_probability = float(prediction[0][0])
+pneumonia_probability = float(prediction[0][1])
 
-                # --------------------------------------------------
-                # SAFETY CLAMP
-                # --------------------------------------------------
+# --------------------------------------------------
+# SAFETY CLAMP
+# --------------------------------------------------
 
-                pneumonia_probability = float(
-                    np.clip(
-                        pneumonia_probability,
-                        0.0,
-                        1.0
-                    )
-                )
+pneumonia_probability = float(
+    np.clip(
+        pneumonia_probability,
+        0.0,
+        1.0
+    )
+)
 
-                normal_probability = (
-                    1.0 - pneumonia_probability
-                )
-
+normal_probability = float(
+    np.clip(
+        normal_probability,
+        0.0,
+        1.0
+    )
+)
                 # ==================================================
                 # STEP 7 — CLASSIFICATION
                 # ==================================================
