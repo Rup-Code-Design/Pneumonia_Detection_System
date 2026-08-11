@@ -138,7 +138,7 @@ try:
 
     xray_model = load_xray_model()
 
-    pneumonia_model = load_pneumonia_model()
+    pneumonia_model = load_pneumonia_model()  
 
 except Exception as e:
 
@@ -147,7 +147,6 @@ except Exception as e:
     st.exception(e)
 
     st.stop()
-
 
 # ============================================================
 # HEADER
