@@ -140,9 +140,9 @@ else:
 # 5. SETTINGS
 # ============================================================
 
-DATASET_PATH = (
-    "/kaggle/input/datasets/rupdasgupta/pneumonia-no-preprocessed/Pnemonia_No_Preprocessed"
-)
+# DATASET_PATH = (
+    # "/kaggle/input/datasets/rupdasgupta/pneumonia-no-preprocessed/Pnemonia_No_Preprocessed"
+# )
 
 # IMPORTANT:
 # Kaggle input = READ ONLY
