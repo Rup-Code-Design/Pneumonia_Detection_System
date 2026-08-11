@@ -301,31 +301,24 @@ def build_model(
     )(x)
 
     # ========================================================
-    # BINARY PNEUMONIA OUTPUT
-    #
-    # 0 = Normal
-    # 1 = Pneumonia
+    # OUTPUT
     # ========================================================
 
-    # ============================================================
-# OUTPUT
-# ============================================================
+    outputs = layers.Dense(
+        2,
+        activation="softmax",
+        dtype="float32",
+        name="pneumonia_probability"
+    )(x)
 
-outputs = layers.Dense(
-    2,
-    activation="softmax",
-    dtype="float32",
-    name="pneumonia_probability"
-)(x)
+    # ========================================================
+    # MODEL
+    # ========================================================
 
-# ============================================================
-# MODEL
-# ============================================================
+    model = Model(
+        inputs=inputs,
+        outputs=outputs,
+        name="Pneumonia_Detection_Model"
+    )
 
-model = Model(
-    inputs=inputs,
-    outputs=outputs,
-    name="Pneumonia_Detection_Model"
-)
-
-return model
+    return model
