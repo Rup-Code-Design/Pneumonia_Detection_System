@@ -5,3 +5,4 @@ opencv-python-headless==4.10.0.84
 Pillow==11.3.0
 fpdf2==2.8.4
 matplotlib
+scikit-learn==1.7.2
