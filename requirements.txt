@@ -1,6 +1,0 @@
-streamlit==1.49.1
-tensorflow-cpu==2.19.0
-numpy==1.26.4
-opencv-python-headless==4.10.0.84
-Pillow==11.3.0
-fpdf2==2.8.4
