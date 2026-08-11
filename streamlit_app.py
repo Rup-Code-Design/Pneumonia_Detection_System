@@ -1,3 +1,4 @@
+```python
 import os
 import io
 
@@ -41,15 +42,24 @@ PNEUMONIA_IMAGE_SIZE = (224, 224)
 
 
 # ============================================================
+# IMAGE VALIDATION SETTINGS
+# ============================================================
+
+COLOR_TOLERANCE = 5.0
+XRAY_CONFIDENCE_THRESHOLD = 0.50
+
+
+# ============================================================
 # X-RAY VERIFIER CLASS MAPPING
 # ============================================================
+
 #
 # IMPORTANT:
 #
 # This code assumes the verifier was trained as:
 #
-#     XRAY      = 0
-#     NON_XRAY  = 1
+# XRAY      = 0
+# NON_XRAY  = 1
 #
 # If your training code printed:
 #
@@ -62,7 +72,7 @@ PNEUMONIA_IMAGE_SIZE = (224, 224)
 # {'NON_XRAY': 0, 'XRAY': 1}
 #
 # CHANGE THIS MAPPING.
-# ============================================================
+#
 
 XRAY_CLASS_MAP = {
     0: "X-RAY",
@@ -150,14 +160,14 @@ st.title("🫁 Pneumonia Detection System")
 
 st.markdown(
     """
-    Upload an image to the system.
+Upload an image to the system.
 
-    **Step 1:** Verify whether the image is a chest X-ray.
+**Step 1:** Verify whether the image is a chest X-ray.
 
-    **Step 2:** If it is a chest X-ray, analyze it for pneumonia.
+**Step 2:** If it is a chest X-ray, analyze it for pneumonia.
 
-    **Step 3:** Report whether the X-ray is Normal or Pneumonia.
-    """
+**Step 3:** Report whether the X-ray is Normal or Pneumonia.
+"""
 )
 
 
@@ -229,6 +239,7 @@ if uploaded_file is not None:
 
         image_array = np.array(image)
 
+
         # ----------------------------------------------------
         # DISPLAY IMAGE
         # ----------------------------------------------------
@@ -238,6 +249,7 @@ if uploaded_file is not None:
             caption="Uploaded Image",
             use_container_width=True
         )
+
 
         # ----------------------------------------------------
         # ANALYZE BUTTON
@@ -265,278 +277,246 @@ if uploaded_file is not None:
 
                     st.stop()
 
+
                 # ==================================================
-# STEP 2 — IMAGE TYPE VALIDATION
-# ==================================================
-
-st.subheader("Step 1 — Chest X-ray Verification")
-
-
-# --------------------------------------------------
-# CHECK WHETHER IMAGE IS ACTUALLY COLOR
-# --------------------------------------------------
-
-# The uploaded image has already been converted to RGB.
-# Compare the RGB channels. A genuine grayscale chest
-# X-ray should have very similar R, G and B values.
-
-rgb_image = image_array.astype(np.float32)
-
-red_channel = rgb_image[:, :, 0]
-green_channel = rgb_image[:, :, 1]
-blue_channel = rgb_image[:, :, 2]
-
-channel_difference = (
-    np.mean(np.abs(red_channel - green_channel))
-    +
-    np.mean(np.abs(green_channel - blue_channel))
-    +
-    np.mean(np.abs(red_channel - blue_channel))
-) / 3.0
-
-
-# --------------------------------------------------
-# REJECT COLOR IMAGES
-# --------------------------------------------------
-
-if channel_difference > COLOR_TOLERANCE:
-
-    st.error(
-        "❌ This is not a Chest X-ray image."
-    )
-
-    st.warning(
-        "Color images are not accepted. "
-        "Please upload a grayscale chest X-ray."
-    )
-
-    history_entry = (
-        f"Rejected - Color image - "
-        f"{uploaded_file.name}"
-    )
-
-    if (
-        history_entry
-        not in st.session_state.history
-    ):
-
-        st.session_state.history.append(
-            history_entry
-        )
-
-    st.stop()
-
-
-# ==================================================
-# STEP 3 — X-RAY VERIFIER MODEL
-# ==================================================
-
-# Resize image for the X-ray verifier
-
-verifier_image = cv2.resize(
-    image_array,
-    XRAY_IMAGE_SIZE,
-    interpolation=cv2.INTER_AREA
-)
-
-
-# --------------------------------------------------
-# CONVERT TO FLOAT
-# --------------------------------------------------
-
-verifier_image = (
-    verifier_image.astype(
-        np.float32
-    ) / 255.0
-)
-
-
-# --------------------------------------------------
-# ADD BATCH DIMENSION
-# --------------------------------------------------
-
-verifier_input = np.expand_dims(
-    verifier_image,
-    axis=0
-)
-
-
-# --------------------------------------------------
-# RUN X-RAY VERIFIER
-# --------------------------------------------------
-
-verifier_prediction = xray_model.predict(
-    verifier_input,
-    verbose=0
-)
-
-
-verifier_prediction = np.asarray(
-    verifier_prediction
-)
-
-
-# --------------------------------------------------
-# VALIDATE VERIFIER OUTPUT
-# --------------------------------------------------
-
-if (
-    verifier_prediction.ndim != 2
-    or verifier_prediction.shape[1] != 2
-):
-
-    st.error(
-        "Unable to verify the image type."
-    )
-
-    st.stop()
-
-
-# --------------------------------------------------
-# GET VERIFIER SCORES
-# --------------------------------------------------
-
-raw_scores = (
-    verifier_prediction[0]
-    .astype(np.float64)
-)
-
-
-# --------------------------------------------------
-# CONVERT TO PROBABILITIES
-# --------------------------------------------------
-
-if (
-    np.all(raw_scores >= 0.0)
-    and
-    np.all(raw_scores <= 1.0)
-    and
-    np.isclose(
-        np.sum(raw_scores),
-        1.0,
-        atol=1e-3
-    )
-):
-
-    verifier_probabilities = raw_scores
-
-else:
-
-    verifier_probabilities = (
-        tf.nn.softmax(
-            raw_scores
-        ).numpy()
-    )
-
-
-# --------------------------------------------------
-# GET PREDICTED CLASS
-# --------------------------------------------------
-
-verifier_class_index = int(
-    np.argmax(
-        verifier_probabilities
-    )
-)
-
-
-verifier_confidence = float(
-    verifier_probabilities[
-        verifier_class_index
-    ]
-)
-
-
-verifier_result = XRAY_CLASS_MAP.get(
-    verifier_class_index,
-    "UNKNOWN"
-)
-
-
-# ==================================================
-# REJECT NON-X-RAY
-# ==================================================
-
-if (
-    verifier_result != "X-RAY"
-    or
-    verifier_confidence < XRAY_CONFIDENCE_THRESHOLD
-):
-
-    st.error(
-        "❌ This is not a Chest X-ray image."
-    )
-
-    st.warning(
-        "Please upload a valid chest X-ray image."
-    )
-
-    history_entry = (
-        f"Rejected - Non-X-ray - "
-        f"{uploaded_file.name}"
-    )
-
-    if (
-        history_entry
-        not in st.session_state.history
-    ):
-
-        st.session_state.history.append(
-            history_entry
-        )
-
-    st.stop()
-
-
-# ==================================================
-# X-RAY CONFIRMED
-# ==================================================
-
-st.success(
-    "✅ Chest X-ray image detected."
-)
-
-
-st.write(
-    f"X-ray verification confidence: "
-    f"{verifier_confidence * 100:.2f}%"
-)
-
-
-# --------------------------------------------------
-# X-RAY PROBABILITIES
-# --------------------------------------------------
-
-xray_probability = float(
-    verifier_probabilities[0]
-)
-
-non_xray_probability = float(
-    verifier_probabilities[1]
-)
-
-
-col1, col2 = st.columns(2)
-
-
-with col1:
-
-    st.metric(
-        "Chest X-ray Probability",
-        f"{xray_probability * 100:.2f}%"
-    )
-
-
-with col2:
-
-    st.metric(
-        "Non-X-ray Probability",
-        f"{non_xray_probability * 100:.2f}%"
-    )
+                # STEP 2 — IMAGE TYPE VALIDATION
+                # ==================================================
+
+                st.subheader(
+                    "Step 1 — Chest X-ray Verification"
+                )
+
+
+                # --------------------------------------------------
+                # CHECK WHETHER IMAGE IS ACTUALLY COLOR
+                # --------------------------------------------------
+
+                # The uploaded image has already been converted to RGB.
+                # Compare the RGB channels. A genuine grayscale chest
+                # X-ray should have very similar R, G and B values.
+
+                rgb_image = image_array.astype(
+                    np.float32
+                )
+
+                red_channel = rgb_image[:, :, 0]
+                green_channel = rgb_image[:, :, 1]
+                blue_channel = rgb_image[:, :, 2]
+
+                channel_difference = (
+                    np.mean(
+                        np.abs(
+                            red_channel - green_channel
+                        )
+                    )
+                    +
+                    np.mean(
+                        np.abs(
+                            green_channel - blue_channel
+                        )
+                    )
+                    +
+                    np.mean(
+                        np.abs(
+                            red_channel - blue_channel
+                        )
+                    )
+                ) / 3.0
+
+
+                # --------------------------------------------------
+                # REJECT COLOR IMAGES
+                # --------------------------------------------------
+
+                if channel_difference > COLOR_TOLERANCE:
+
+                    st.error(
+                        "❌ This is not a Chest X-ray image."
+                    )
+
+                    st.warning(
+                        "Color images are not accepted. "
+                        "Please upload a grayscale chest X-ray."
+                    )
+
+                    history_entry = (
+                        f"Rejected - Color image - "
+                        f"{uploaded_file.name}"
+                    )
+
+                    if (
+                        history_entry
+                        not in st.session_state.history
+                    ):
+
+                        st.session_state.history.append(
+                            history_entry
+                        )
+
+                    st.stop()
 
 
                 # ==================================================
-                # STEP 4 — X-RAY CONFIRMED
+                # STEP 3 — X-RAY VERIFIER MODEL
+                # ==================================================
+
+                # Resize image for the X-ray verifier
+
+                verifier_image = cv2.resize(
+                    image_array,
+                    XRAY_IMAGE_SIZE,
+                    interpolation=cv2.INTER_AREA
+                )
+
+
+                # --------------------------------------------------
+                # CONVERT TO FLOAT
+                # --------------------------------------------------
+
+                verifier_image = (
+                    verifier_image.astype(
+                        np.float32
+                    ) / 255.0
+                )
+
+
+                # --------------------------------------------------
+                # ADD BATCH DIMENSION
+                # --------------------------------------------------
+
+                verifier_input = np.expand_dims(
+                    verifier_image,
+                    axis=0
+                )
+
+
+                # --------------------------------------------------
+                # RUN X-RAY VERIFIER
+                # --------------------------------------------------
+
+                verifier_prediction = xray_model.predict(
+                    verifier_input,
+                    verbose=0
+                )
+
+                verifier_prediction = np.asarray(
+                    verifier_prediction
+                )
+
+
+                # --------------------------------------------------
+                # VALIDATE VERIFIER OUTPUT
+                # --------------------------------------------------
+
+                if (
+                    verifier_prediction.ndim != 2
+                    or verifier_prediction.shape[1] != 2
+                ):
+
+                    st.error(
+                        "Unable to verify the image type."
+                    )
+
+                    st.stop()
+
+
+                # --------------------------------------------------
+                # GET VERIFIER SCORES
+                # --------------------------------------------------
+
+                raw_scores = (
+                    verifier_prediction[0]
+                    .astype(np.float64)
+                )
+
+
+                # --------------------------------------------------
+                # CONVERT TO PROBABILITIES
+                # --------------------------------------------------
+
+                if (
+                    np.all(raw_scores >= 0.0)
+                    and
+                    np.all(raw_scores <= 1.0)
+                    and
+                    np.isclose(
+                        np.sum(raw_scores),
+                        1.0,
+                        atol=1e-3
+                    )
+                ):
+
+                    verifier_probabilities = raw_scores
+
+                else:
+
+                    verifier_probabilities = (
+                        tf.nn.softmax(
+                            raw_scores
+                        ).numpy()
+                    )
+
+
+                # --------------------------------------------------
+                # GET PREDICTED CLASS
+                # --------------------------------------------------
+
+                verifier_class_index = int(
+                    np.argmax(
+                        verifier_probabilities
+                    )
+                )
+
+                verifier_confidence = float(
+                    verifier_probabilities[
+                        verifier_class_index
+                    ]
+                )
+
+                verifier_result = XRAY_CLASS_MAP.get(
+                    verifier_class_index,
+                    "UNKNOWN"
+                )
+
+
+                # ==================================================
+                # REJECT NON-X-RAY
+                # ==================================================
+
+                if (
+                    verifier_result != "X-RAY"
+                    or
+                    verifier_confidence
+                    < XRAY_CONFIDENCE_THRESHOLD
+                ):
+
+                    st.error(
+                        "❌ This is not a Chest X-ray image."
+                    )
+
+                    st.warning(
+                        "Please upload a valid chest X-ray image."
+                    )
+
+                    history_entry = (
+                        f"Rejected - Non-X-ray - "
+                        f"{uploaded_file.name}"
+                    )
+
+                    if (
+                        history_entry
+                        not in st.session_state.history
+                    ):
+
+                        st.session_state.history.append(
+                            history_entry
+                        )
+
+                    st.stop()
+
+
+                # ==================================================
+                # X-RAY CONFIRMED
                 # ==================================================
 
                 st.success(
@@ -549,9 +529,9 @@ with col2:
                 )
 
 
-                # ==================================================
-                # SHOW X-RAY PROBABILITY
-                # ==================================================
+                # --------------------------------------------------
+                # X-RAY PROBABILITIES
+                # --------------------------------------------------
 
                 xray_probability = float(
                     verifier_probabilities[0]
@@ -579,224 +559,227 @@ with col2:
                     )
 
 
-                            # ==================================================
-            # STEP 5 — PNEUMONIA DETECTION
-            # ==================================================
+                # ==================================================
+                # STEP 4 — PNEUMONIA DETECTION
+                # ==================================================
 
-            st.subheader(
-                "Step 2 — Pneumonia Detection"
-            )
-
-            # --------------------------------------------------
-            # PREPARE PNEUMONIA MODEL INPUT
-            # --------------------------------------------------
-
-            pneumonia_image = cv2.resize(
-                image_array,
-                PNEUMONIA_IMAGE_SIZE,
-                interpolation=cv2.INTER_AREA
-            )
-
-            pneumonia_image = (
-                pneumonia_image.astype(
-                    np.float32
-                ) / 255.0
-            )
-
-            pneumonia_input = np.expand_dims(
-                pneumonia_image,
-                axis=0
-            )
-
-            # --------------------------------------------------
-            # RUN PNEUMONIA MODEL
-            # --------------------------------------------------
-
-            prediction = pneumonia_model.predict(
-                pneumonia_input,
-                verbose=0
-            )
-
-            prediction = np.asarray(
-                prediction
-            )
-
-            # ==================================================
-            # STEP 6 — PROCESS 2-CLASS OUTPUT
-            # ==================================================
-
-            # Expected model output:
-            #
-            # Class 0 = Normal
-            # Class 1 = Pneumonia
-            #
-            # Example:
-            # [0.8138, 0.1862]
-            #
-            # Normal     = 81.38%
-            # Pneumonia  = 18.62%
-
-            if (
-                prediction.ndim != 2
-                or prediction.shape[1] != 2
-            ):
-
-                st.error(
-                    "Unable to process the pneumonia prediction."
+                st.subheader(
+                    "Step 2 — Pneumonia Detection"
                 )
 
-                st.stop()
 
-            # --------------------------------------------------
-            # GET MODEL SCORES
-            # --------------------------------------------------
+                # --------------------------------------------------
+                # PREPARE PNEUMONIA MODEL INPUT
+                # --------------------------------------------------
 
-            pneumonia_scores = (
-                prediction[0].astype(np.float64)
-            )
-
-            # --------------------------------------------------
-            # CONVERT LOGITS TO PROBABILITIES IF NECESSARY
-            # --------------------------------------------------
-
-            if (
-                np.all(pneumonia_scores >= 0.0)
-                and
-                np.all(pneumonia_scores <= 1.0)
-                and
-                np.isclose(
-                    np.sum(pneumonia_scores),
-                    1.0,
-                    atol=1e-3
-                )
-            ):
-
-                pneumonia_probabilities = (
-                    pneumonia_scores
+                pneumonia_image = cv2.resize(
+                    image_array,
+                    PNEUMONIA_IMAGE_SIZE,
+                    interpolation=cv2.INTER_AREA
                 )
 
-            else:
+                pneumonia_image = (
+                    pneumonia_image.astype(
+                        np.float32
+                    ) / 255.0
+                )
 
-                pneumonia_probabilities = (
-                    tf.nn.softmax(
+                pneumonia_input = np.expand_dims(
+                    pneumonia_image,
+                    axis=0
+                )
+
+
+                # --------------------------------------------------
+                # RUN PNEUMONIA MODEL
+                # --------------------------------------------------
+
+                prediction = pneumonia_model.predict(
+                    pneumonia_input,
+                    verbose=0
+                )
+
+                prediction = np.asarray(
+                    prediction
+                )
+
+
+                # ==================================================
+                # STEP 5 — PROCESS 2-CLASS OUTPUT
+                # ==================================================
+
+                # Expected model output:
+                #
+                # Class 0 = Normal
+                # Class 1 = Pneumonia
+                #
+                # Example:
+                # [0.8138, 0.1862]
+                #
+                # Normal     = 81.38%
+                # Pneumonia  = 18.62%
+
+
+                if (
+                    prediction.ndim != 2
+                    or prediction.shape[1] != 2
+                ):
+
+                    st.error(
+                        "Unable to process the pneumonia prediction."
+                    )
+
+                    st.stop()
+
+
+                # --------------------------------------------------
+                # GET MODEL SCORES
+                # --------------------------------------------------
+
+                pneumonia_scores = (
+                    prediction[0]
+                    .astype(np.float64)
+                )
+
+
+                # --------------------------------------------------
+                # CONVERT LOGITS TO PROBABILITIES IF NECESSARY
+                # --------------------------------------------------
+
+                if (
+                    np.all(
+                        pneumonia_scores >= 0.0
+                    )
+                    and
+                    np.all(
+                        pneumonia_scores <= 1.0
+                    )
+                    and
+                    np.isclose(
+                        np.sum(
+                            pneumonia_scores
+                        ),
+                        1.0,
+                        atol=1e-3
+                    )
+                ):
+
+                    pneumonia_probabilities = (
                         pneumonia_scores
-                    ).numpy()
+                    )
+
+                else:
+
+                    pneumonia_probabilities = (
+                        tf.nn.softmax(
+                            pneumonia_scores
+                        ).numpy()
+                    )
+
+
+                # --------------------------------------------------
+                # CLASS MAPPING
+                # --------------------------------------------------
+                #
+                # 0 = Normal
+                # 1 = Pneumonia
+                #
+                # --------------------------------------------------
+
+                normal_probability = float(
+                    pneumonia_probabilities[0]
                 )
 
-            # --------------------------------------------------
-            # CLASS MAPPING
-            # --------------------------------------------------
-            #
-            # 0 = Normal
-            # 1 = Pneumonia
-            #
-            # --------------------------------------------------
+                pneumonia_probability = float(
+                    pneumonia_probabilities[1]
+                )
 
-            normal_probability = float(
-                pneumonia_probabilities[0]
-            )
 
-            pneumonia_probability = float(
-                pneumonia_probabilities[1]
-            )
+                # ==================================================
+                # STEP 6 — FINAL DIAGNOSIS
+                # ==================================================
 
-            # ==================================================
-            # STEP 7 — FINAL DIAGNOSIS
-            # ==================================================
-
-            if (
-                pneumonia_probability
-                >= normal_probability
-            ):
-
-                diagnosis = "Pneumonia"
-
-                diagnosis_confidence = (
+                if (
                     pneumonia_probability
+                    >= normal_probability
+                ):
+
+                    diagnosis = "Pneumonia"
+
+                    diagnosis_confidence = (
+                        pneumonia_probability
+                    )
+
+                else:
+
+                    diagnosis = "Normal"
+
+                    diagnosis_confidence = (
+                        normal_probability
+                    )
+
+
+                # --------------------------------------------------
+                # DISPLAY DIAGNOSIS
+                # --------------------------------------------------
+
+                if diagnosis == "Pneumonia":
+
+                    st.error(
+                        "Diagnosis: Pneumonia"
+                    )
+
+                else:
+
+                    st.success(
+                        "Diagnosis: Normal"
+                    )
+
+
+                # --------------------------------------------------
+                # FINAL RESULT
+                # --------------------------------------------------
+
+                st.subheader(
+                    "Final Result"
                 )
 
-            else:
 
-                diagnosis = "Normal"
+                col1, col2 = st.columns(2)
 
-                diagnosis_confidence = (
-                    normal_probability
+                with col1:
+
+                    st.metric(
+                        "Normal",
+                        f"{normal_probability * 100:.2f}%"
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "Pneumonia",
+                        f"{pneumonia_probability * 100:.2f}%"
+                    )
+
+
+                st.write(
+                    f"**Final Diagnosis:** {diagnosis}"
                 )
 
-            # --------------------------------------------------
-            # DISPLAY DIAGNOSIS
-            # --------------------------------------------------
-
-            if diagnosis == "Pneumonia":
-
-                st.error(
-                    "Diagnosis: Pneumonia"
+                st.write(
+                    f"**Diagnosis Confidence:** "
+                    f"{diagnosis_confidence * 100:.2f}%"
                 )
 
-            else:
 
-                st.success(
-                    "Diagnosis: Normal"
-                )
-
-            # --------------------------------------------------
-            # FINAL RESULT
-            # --------------------------------------------------
-
-            st.subheader(
-                "Final Result"
-            )
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.metric(
-                    "Normal",
-                    f"{normal_probability * 100:.2f}%"
-                )
-
-            with col2:
-
-                st.metric(
-                    "Pneumonia",
-                    f"{pneumonia_probability * 100:.2f}%"
-                )
-
-            st.write(
-                f"**Final Diagnosis:** {diagnosis}"
-            )
-
-            st.write(
-                f"**Diagnosis Confidence:** "
-                f"{diagnosis_confidence * 100:.2f}%"
-            )
-
-            # ==================================================
-            # HISTORY
-            # ==================================================
-
-            history_entry = (
-                f"{diagnosis} - "
-                f"{uploaded_file.name}"
-            )
-
-            if (
-                history_entry
-                not in st.session_state.history
-            ):
-
-                st.session_state.history.append(
-                    history_entry
-                )                # ==================================================
-                # STEP 8 — HISTORY
+                # ==================================================
+                # STEP 7 — HISTORY
                 # ==================================================
 
                 history_entry = (
                     f"{diagnosis} - "
                     f"{uploaded_file.name}"
                 )
-
 
                 if (
                     history_entry
@@ -809,7 +792,7 @@ with col2:
 
 
                 # ==================================================
-                # STEP 9 — PDF REPORT
+                # STEP 8 — PDF REPORT
                 # ==================================================
 
                 st.divider()
@@ -1076,3 +1059,4 @@ with col2:
         )
 
         st.exception(e)
+```
