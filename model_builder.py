@@ -307,21 +307,25 @@ def build_model(
     # 1 = Pneumonia
     # ========================================================
 
-    outputs = layers.Dense(
-        1,
-        activation="sigmoid",
-        dtype="float32",
-        name="pneumonia_probability"
-    )(x)
+    # ============================================================
+# OUTPUT
+# ============================================================
 
-    # ========================================================
-    # MODEL
-    # ========================================================
+outputs = layers.Dense(
+    2,
+    activation="softmax",
+    dtype="float32",
+    name="pneumonia_probability"
+)(x)
 
-    model = Model(
-        inputs=inputs,
-        outputs=outputs,
-        name="Pneumonia_Detection_Model"
-    )
+# ============================================================
+# MODEL
+# ============================================================
 
-    return model
+model = Model(
+    inputs=inputs,
+    outputs=outputs,
+    name="Pneumonia_Detection_Model"
+)
+
+return model
