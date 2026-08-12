@@ -824,14 +824,15 @@ if uploaded_file is not None:
             # NOT MobileNetV2 preprocess_input()
             # =================================================
 
-            modality_array = (
-                modality_array / 255.0
-            )
+           modality_array = np.asarray(modality_image,dtype=np.float32
+                                      )
 
-            modality_input = np.expand_dims(
-                modality_array,
-                axis=0
-            )
+# MUST MATCH TRAINING:
+# ImageDataGenerator(rescale=1.0 / 255.0)
+
+           modality_array = modality_array / 255.0
+
+           modality_input = np.expand_dims(modality_array,axis=0)
 
             # =================================================
             # PREDICT
