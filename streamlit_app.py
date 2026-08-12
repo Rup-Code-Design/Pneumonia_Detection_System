@@ -11,7 +11,7 @@ from fpdf import FPDF
 
 from model_builder import build_model
 from xray_model_builder import build_xray_classifier
-from modality_model_builder import build_modality_classifier
+# from modality_model_builder import build_modality_classifier
 
 
 # ============================================================
