@@ -397,21 +397,10 @@ def is_obvious_colour_image(
 # 14. PREPARE MODALITY IMAGE
 # ============================================================
 
-def prepare_modality_image(
-    image
-):
-
-    """
-    EXACTLY matches training:
-
-        target_size=(128,128)
-        rescale=1.0/255.0
-
-    No MobileNetV2 preprocess_input().
-    """
+def prepare_modality_image(image):
 
     resized = image.resize(
-        MODALITY_IMAGE_SIZE,
+        (128, 128),
         Image.Resampling.LANCZOS
     )
 
@@ -420,7 +409,7 @@ def prepare_modality_image(
         dtype=np.float32
     )
 
-    # EXACT TRAINING PREPROCESSING
+    # EXACTLY MATCH TRAINING
     array = array / 255.0
 
     array = np.expand_dims(
@@ -430,37 +419,69 @@ def prepare_modality_image(
 
     return array
 
-
 # ============================================================
-# 15. MODALITY PREDICTION
+# DEBUG MODALITY PREDICTION
 # ============================================================
 
-def predict_modality(
-    image
-):
+modality_input = prepare_modality_image(image_rgb)
 
-    model_input = prepare_modality_image(
-        image
-    )
+raw_prediction = modality_model.predict(
+    modality_input,
+    verbose=0
+)
 
-    prediction = modality_model.predict(
-        model_input,
-        verbose=0
-    )
+raw_prediction = np.asarray(
+    raw_prediction,
+    dtype=np.float64
+)
 
-    prediction = np.asarray(
-        prediction,
-        dtype=np.float64
-    )
+st.write("### DEBUG — CT_Verifier.keras")
 
-    if prediction.shape != (1, 3):
+st.write(
+    "Model input shape:",
+    modality_model.input_shape
+)
 
-        raise ValueError(
-            "Unexpected modality prediction shape: "
-            f"{prediction.shape}"
-        )
+st.write(
+    "Model output shape:",
+    modality_model.output_shape
+)
 
-    probabilities = prediction[0]
+st.write(
+    "Raw model output:",
+    raw_prediction
+)
+
+probabilities = raw_prediction[0]
+
+st.write(
+    "CHEST_XRAY:",
+    f"{probabilities[0] * 100:.4f}%"
+)
+
+st.write(
+    "CT:",
+    f"{probabilities[1] * 100:.4f}%"
+)
+
+st.write(
+    "MRI:",
+    f"{probabilities[2] * 100:.4f}%"
+)
+
+predicted_index = int(
+    np.argmax(probabilities)
+)
+
+st.write(
+    "Predicted index:",
+    predicted_index
+)
+
+st.write(
+    "Predicted class:",
+    MODALITY_CLASS_NAMES[predicted_index]
+)
 
     # --------------------------------------------------------
     # Softmax safety
