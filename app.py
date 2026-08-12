@@ -1,40 +1,24 @@
 # ============================================================
-# PNEUMONIA AI — MODALITY VERIFICATION + PNEUMONIA DETECTION
+# PNEUMONIA DETECTION SYSTEM
 # ============================================================
 #
-# Modality model:
-#   0 = CHEST_XRAY
-#   1 = CT
-#   2 = MRI
+# PIPELINE:
 #
-# Workflow:
+# Uploaded Image
+#       |
+#       v
+# CT_Verifier.keras
+#       |
+#       +---- CT  ----------> Reject
+#       |
+#       +---- MRI ---------> Reject
+#       |
+#       +---- Chest X-ray -> Pneumonia Model
+#                              |
+#                              +--> Normal
+#                              |
+#                              +--> Pneumonia
 #
-#   Upload image
-#        |
-#        v
-#   Colour image?
-#      YES ---> Reject
-#      NO
-#        |
-#        v
-#   Modality classifier
-#        |
-#   +----+----+
-#   |         |
-# X-RAY     CT/MRI
-#   |         |
-#   v         v
-# Pneumonia  Reject
-# Detection
-#   |
-#   v
-# Normal / Pneumonia
-#
-# ============================================================
-
-
-# ============================================================
-# 1. IMPORT LIBRARIES
 # ============================================================
 
 import os
@@ -45,12 +29,12 @@ import numpy as np
 import tensorflow as tf
 import streamlit as st
 
-from PIL import Image, ImageStat
+from PIL import Image
 from fpdf import FPDF
 
 
 # ============================================================
-# 2. PAGE CONFIGURATION
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -61,39 +45,38 @@ st.set_page_config(
 
 
 # ============================================================
-# 3. MODEL PATHS
+# MODEL PATHS
 # ============================================================
 
-# ------------------------------------------------------------
-# NEW MODALITY MODEL
+# IMPORTANT:
+# This is the complete 3-class modality model that you
+# trained and uploaded.
 #
-# This is the model from your latest training code:
-#
+# Classes:
 # 0 = CHEST_XRAY
 # 1 = CT
 # 2 = MRI
-# ------------------------------------------------------------
 
 MODALITY_MODEL_PATH = "CT_Verifier.keras"
 
 
-# ------------------------------------------------------------
-# PNEUMONIA MODEL
-# ------------------------------------------------------------
-
-PNEUMONIA_MODEL_PATH = (
-    "best_xception_pneumonia_model.keras"
-)
+# Complete pneumonia model
+PNEUMONIA_MODEL_PATH = "best_xception_pneumonia_model.keras"
 
 
 # ============================================================
-# 4. IMAGE SIZE
+# IMAGE SIZES
 # ============================================================
+
+# Your CT_Verifier.keras was trained at 128 x 128
 
 MODALITY_IMAGE_SIZE = (
     128,
     128
 )
+
+
+# Your pneumonia model uses 224 x 224
 
 PNEUMONIA_IMAGE_SIZE = (
     224,
@@ -102,20 +85,10 @@ PNEUMONIA_IMAGE_SIZE = (
 
 
 # ============================================================
-# 5. MODALITY CLASS NAMES
+# MODALITY CLASS NAMES
 # ============================================================
 
-# IMPORTANT:
-#
-# This MUST match the training code:
-#
-# CHEST_XRAY = 0
-# CT         = 1
-# MRI        = 2
-#
-# flow_from_directory() normally sorts these
-# alphabetically, so this is correct.
-# ============================================================
+# MUST MATCH YOUR TRAINING CODE
 
 MODALITY_CLASS_NAMES = [
     "CHEST_XRAY",
@@ -125,143 +98,47 @@ MODALITY_CLASS_NAMES = [
 
 
 # ============================================================
-# 6. CHEST X-RAY THRESHOLD
+# CHEST X-RAY THRESHOLD
 # ============================================================
+
+# Important:
 #
-# The X-ray must:
+# The model must predict CHEST_XRAY as the highest class.
 #
-# 1. Be predicted as CHEST_XRAY
-# 2. Have at least this probability
+# The probability must also exceed this threshold.
 #
 # Do NOT make this extremely low.
 #
-# Start with 0.50.
+# 0.35 means:
 #
-# If valid X-rays are still rejected after testing,
-# this can be reduced to 0.40.
+# Chest X-ray probability >= 35%
+# AND
+# Chest X-ray must be the highest probability.
 #
+# If your trained model performs poorly, changing this
+# threshold alone will NOT fix the model.
+
+CHEST_XRAY_THRESHOLD = 0.35
+
+
 # ============================================================
-
-CHEST_XRAY_THRESHOLD = 0.50
-
-
-# ============================================================
-# 7. PNEUMONIA THRESHOLD
+# PNEUMONIA THRESHOLD
 # ============================================================
 
 PNEUMONIA_THRESHOLD = 0.50
 
 
 # ============================================================
-# 8. COLOUR IMAGE DETECTION
-# ============================================================
-#
-# Your requirement:
-#
-# "If I give Colour image reject it."
-#
-# We therefore perform an explicit colour check BEFORE
-# sending the image to the modality model.
-#
-# A grayscale image saved as RGB can still have 3 channels,
-# so checking only image.mode == "RGB" is WRONG.
-#
-# Instead, we compare RGB channels.
-#
-# COLOR_TOLERANCE:
-#   Smaller = stricter grayscale requirement.
-#
-# ============================================================
-
-COLOR_TOLERANCE = 8.0
-
-
-def is_colour_image(
-    image,
-    tolerance=COLOR_TOLERANCE
-):
-    """
-    Returns True if the image contains meaningful
-    colour information.
-
-    Grayscale images may be stored internally as RGB.
-    Therefore, simply checking image.mode is not enough.
-    """
-
-    rgb_image = image.convert("RGB")
-
-    array = np.asarray(
-        rgb_image,
-        dtype=np.int16
-    )
-
-    red = array[:, :, 0]
-    green = array[:, :, 1]
-    blue = array[:, :, 2]
-
-    # Difference between colour channels
-    rg_difference = np.abs(
-        red - green
-    )
-
-    rb_difference = np.abs(
-        red - blue
-    )
-
-    gb_difference = np.abs(
-        green - blue
-    )
-
-    maximum_difference = np.maximum(
-        np.maximum(
-            rg_difference,
-            rb_difference
-        ),
-        gb_difference
-    )
-
-    # Percentage of pixels containing meaningful colour
-    coloured_pixels = (
-        maximum_difference > tolerance
-    )
-
-    colour_ratio = np.mean(
-        coloured_pixels
-    )
-
-    # Reject if more than 1% of pixels
-    # contain meaningful colour information.
-    return colour_ratio > 0.01
-
-
-# ============================================================
-# 9. CONVERT IMAGE TO GRAYSCALE
-# ============================================================
-
-def prepare_grayscale_image(image):
-    """
-    Converts the accepted image to grayscale and
-    then back to RGB.
-
-    This gives the CNN a 3-channel input while preserving
-    the grayscale medical-image information.
-    """
-
-    grayscale = image.convert("L")
-
-    return grayscale.convert("RGB")
-
-
-# ============================================================
-# 10. SESSION STATE
+# SESSION STATE
 # ============================================================
 
 if "history" not in st.session_state:
+
     st.session_state.history = []
 
 
 # ============================================================
-# 11. LOAD MODALITY MODEL
+# LOAD MODALITY MODEL
 # ============================================================
 
 @st.cache_resource
@@ -272,22 +149,55 @@ def load_modality_model():
     ):
 
         raise FileNotFoundError(
-            "Modality model not found:\n"
-            f"{MODALITY_MODEL_PATH}\n\n"
-            "Upload CT_Verifier.keras to the "
-            "same directory as app.py."
+            "CT_Verifier.keras was not found.\n\n"
+            "Place CT_Verifier.keras in the same "
+            "folder as app.py."
         )
+
+    # --------------------------------------------------------
+    # Load complete Keras model
+    # --------------------------------------------------------
 
     model = tf.keras.models.load_model(
         MODALITY_MODEL_PATH,
         compile=False
     )
 
+    # --------------------------------------------------------
+    # Verify input shape
+    # --------------------------------------------------------
+
+    expected_input = (
+        128,
+        128,
+        3
+    )
+
+    if model.input_shape[1:] != expected_input:
+
+        raise ValueError(
+            "Unexpected modality model input shape.\n"
+            f"Expected: {expected_input}\n"
+            f"Found: {model.input_shape[1:]}"
+        )
+
+    # --------------------------------------------------------
+    # Verify output shape
+    # --------------------------------------------------------
+
+    if model.output_shape[-1] != 3:
+
+        raise ValueError(
+            "CT_Verifier.keras must have exactly "
+            "3 output classes.\n"
+            f"Found output shape: {model.output_shape}"
+        )
+
     return model
 
 
 # ============================================================
-# 12. LOAD PNEUMONIA MODEL
+# LOAD PNEUMONIA MODEL
 # ============================================================
 
 @st.cache_resource
@@ -298,51 +208,25 @@ def load_pneumonia_model():
     ):
 
         raise FileNotFoundError(
-            "Pneumonia model not found:\n"
+            "Pneumonia model was not found.\n\n"
+            f"Required file:\n"
             f"{PNEUMONIA_MODEL_PATH}"
         )
 
     # --------------------------------------------------------
-    # First try complete .keras model
+    # Load complete .keras model
     # --------------------------------------------------------
 
-    try:
-
-        model = tf.keras.models.load_model(
-            PNEUMONIA_MODEL_PATH,
-            compile=False
-        )
-
-        return model
-
-    except Exception:
-
-        pass
-
-
-    # --------------------------------------------------------
-    # Fallback: build architecture and load weights
-    # --------------------------------------------------------
-
-    from model_builder import build_model
-
-    model = build_model(
-        input_shape=(
-            224,
-            224,
-            3
-        )
-    )
-
-    model.load_weights(
-        PNEUMONIA_MODEL_PATH
+    model = tf.keras.models.load_model(
+        PNEUMONIA_MODEL_PATH,
+        compile=False
     )
 
     return model
 
 
 # ============================================================
-# 13. LOAD MODELS
+# LOAD BOTH MODELS
 # ============================================================
 
 try:
@@ -363,86 +247,33 @@ except Exception as e:
 
 
 # ============================================================
-# 14. VERIFY MODALITY MODEL OUTPUT
-# ============================================================
-
-try:
-
-    modality_output_shape = (
-        modality_model.output_shape
-    )
-
-    if (
-        modality_output_shape[-1]
-        != 3
-    ):
-
-        st.error(
-            "Incorrect modality model detected."
-        )
-
-        st.write(
-            "Expected output classes: 3"
-        )
-
-        st.write(
-            "Expected mapping:"
-        )
-
-        st.write(
-            "0 = CHEST_XRAY"
-        )
-
-        st.write(
-            "1 = CT"
-        )
-
-        st.write(
-            "2 = MRI"
-        )
-
-        st.write(
-            "Actual model output:",
-            modality_output_shape
-        )
-
-        st.stop()
-
-except Exception as e:
-
-    st.error(
-        "Could not verify modality model."
-    )
-
-    st.exception(e)
-
-    st.stop()
-
-
-# ============================================================
-# 15. HEADER
+# HEADER
 # ============================================================
 
 st.title(
-    "🫁 Pneumonia Detection System"
+    "Pneumonia Detection System"
 )
 
 st.markdown(
     """
-### Medical Image Verification Pipeline
+This system performs medical image modality verification
+before pneumonia detection.
 
-1. **Colour images are rejected**
-2. **CT scans are identified and rejected**
-3. **MRI images are identified and rejected**
-4. **Chest X-rays proceed to pneumonia detection**
-5. **Chest X-ray → Normal or Pneumonia**
-6. **A PDF diagnostic report can be downloaded**
+### Processing pipeline
+
+**Chest X-ray → Pneumonia Detection**
+
+**CT → Rejected**
+
+**MRI → Rejected**
+
+**Colour / unsupported image → Rejected**
 """
 )
 
 
 # ============================================================
-# 16. SIDEBAR
+# SIDEBAR
 # ============================================================
 
 with st.sidebar:
@@ -452,15 +283,15 @@ with st.sidebar:
     )
 
     st.write(
-        "**Modality Model:**"
+        "Modality Model:"
     )
 
-    st.write(
+    st.code(
         "CT_Verifier.keras"
     )
 
     st.write(
-        "**Classes:**"
+        "Modality Classes:"
     )
 
     st.write(
@@ -478,12 +309,22 @@ with st.sidebar:
     st.divider()
 
     st.write(
-        "**X-ray threshold:** "
+        "Pneumonia Model:"
+    )
+
+    st.code(
+        "best_xception_pneumonia_model.keras"
+    )
+
+    st.divider()
+
+    st.write(
+        f"Chest X-ray threshold: "
         f"{CHEST_XRAY_THRESHOLD:.2f}"
     )
 
     st.write(
-        "**Pneumonia threshold:** "
+        f"Pneumonia threshold: "
         f"{PNEUMONIA_THRESHOLD:.2f}"
     )
 
@@ -513,12 +354,12 @@ with st.sidebar:
 
 
 # ============================================================
-# 17. FILE UPLOADER
+# FILE UPLOADER
 # ============================================================
 
 uploaded_file = st.file_uploader(
 
-    "Upload an image",
+    "Upload a medical image",
 
     type=[
         "jpg",
@@ -529,14 +370,15 @@ uploaded_file = st.file_uploader(
     ],
 
     help=(
-        "Upload a grayscale medical image. "
-        "Colour images will be rejected."
+        "Upload a Chest X-ray image. "
+        "CT and MRI images will be identified "
+        "and rejected."
     )
 )
 
 
 # ============================================================
-# 18. IMAGE PROCESSING
+# MAIN PROCESSING
 # ============================================================
 
 if uploaded_file is not None:
@@ -555,22 +397,26 @@ if uploaded_file is not None:
             io.BytesIO(file_bytes)
         )
 
+        # ----------------------------------------------------
+        # Original image information
+        # ----------------------------------------------------
+
+        original_mode = image.mode
+
+        original_width, original_height = (
+            image.size
+        )
+
+        # ----------------------------------------------------
+        # Convert only for model processing
+        # ----------------------------------------------------
+
+        rgb_image = image.convert(
+            "RGB"
+        )
 
         # ====================================================
-        # BASIC IMAGE VALIDATION
-        # ====================================================
-
-        if image.width < 32 or image.height < 32:
-
-            st.error(
-                "❌ Image is too small."
-            )
-
-            st.stop()
-
-
-        # ====================================================
-        # DISPLAY ORIGINAL IMAGE
+        # DISPLAY IMAGE
         # ====================================================
 
         st.subheader(
@@ -578,10 +424,36 @@ if uploaded_file is not None:
         )
 
         st.image(
-            image,
-            caption=uploaded_file.name,
+            rgb_image,
+            caption=(
+                f"{uploaded_file.name} | "
+                f"{original_width} × {original_height}"
+            ),
             use_container_width=True
         )
+
+
+        # ====================================================
+        # BASIC IMAGE VALIDATION
+        # ====================================================
+
+        # Reject completely invalid images
+
+        if (
+            original_width < 32
+            or
+            original_height < 32
+        ):
+
+            st.error(
+                "Image resolution is too small."
+            )
+
+            st.warning(
+                "Please upload a proper medical image."
+            )
+
+            st.stop()
 
 
         # ====================================================
@@ -590,7 +462,8 @@ if uploaded_file is not None:
 
         if st.button(
             "Analyze Image",
-            type="primary"
+            type="primary",
+            use_container_width=True
         ):
 
             # =================================================
@@ -598,37 +471,91 @@ if uploaded_file is not None:
             # =================================================
 
             st.subheader(
-                "Step 0 — Image Type Check"
+                "Step 0 — Image Quality Verification"
             )
 
+            # -------------------------------------------------
+            # Determine whether image contains meaningful
+            # colour information.
+            #
+            # This is NOT the final modality classifier.
+            # It is an additional safeguard against ordinary
+            # colour photographs/images.
+            # -------------------------------------------------
 
-            colour_detected = is_colour_image(
-                image
+            rgb_array = np.asarray(
+                rgb_image,
+                dtype=np.float32
             )
 
+            red = rgb_array[:, :, 0]
+            green = rgb_array[:, :, 1]
+            blue = rgb_array[:, :, 2]
 
-            # =================================================
-            # REJECT COLOUR IMAGE
-            # =================================================
+            channel_difference = (
+                np.maximum.reduce(
+                    [
+                        np.abs(red - green),
+                        np.abs(red - blue),
+                        np.abs(green - blue)
+                    ]
+                )
+            )
 
-            if colour_detected:
+            colour_fraction = float(
+                np.mean(
+                    channel_difference > 12.0
+                )
+            )
+
+            mean_channel_difference = float(
+                np.mean(
+                    channel_difference
+                )
+            )
+
+            # -------------------------------------------------
+            # Colour image rejection
+            #
+            # A grayscale X-ray converted to RGB will have
+            # nearly identical RGB channels.
+            #
+            # Normal colour photographs generally have much
+            # larger channel differences.
+            # -------------------------------------------------
+
+            IS_COLOUR_IMAGE = (
+                colour_fraction > 0.10
+                and
+                mean_channel_difference > 8.0
+            )
+
+            if IS_COLOUR_IMAGE:
 
                 st.error(
-                    "❌ Colour image detected."
+                    "Colour image detected."
                 )
 
                 st.warning(
-                    "Please upload a grayscale "
-                    "medical image such as a "
-                    "Chest X-ray, CT scan, or MRI."
+                    "Please upload a Chest X-ray image. "
+                    "Colour photographs and other colour "
+                    "images are not accepted."
                 )
 
+                st.write(
+                    f"Colour-pixel fraction: "
+                    f"{colour_fraction * 100:.2f}%"
+                )
+
+                st.write(
+                    f"Mean RGB channel difference: "
+                    f"{mean_channel_difference:.2f}"
+                )
 
                 history_entry = (
-                    "Rejected - Colour image - "
+                    f"Rejected - Colour image - "
                     f"{uploaded_file.name}"
                 )
-
 
                 if (
                     history_entry
@@ -639,16 +566,11 @@ if uploaded_file is not None:
                         history_entry
                     )
 
-
                 st.stop()
 
 
-            # =================================================
-            # GRAYSCALE IMAGE ACCEPTED
-            # =================================================
-
             st.success(
-                "✓ Grayscale image detected."
+                "Image passed the colour-image check."
             )
 
 
@@ -660,27 +582,14 @@ if uploaded_file is not None:
                 "Step 1 — Medical Image Modality"
             )
 
-
             # -------------------------------------------------
-            # Convert grayscale image to RGB
-            #
-            # MobileNetV2 expects 3 channels.
+            # Resize to 128 x 128
             # -------------------------------------------------
 
-            model_image = (
-                prepare_grayscale_image(
-                    image
-                )
+            modality_image = rgb_image.resize(
+                MODALITY_IMAGE_SIZE,
+                Image.Resampling.LANCZOS
             )
-
-
-            modality_image = (
-                model_image.resize(
-                    MODALITY_IMAGE_SIZE,
-                    Image.Resampling.LANCZOS
-                )
-            )
-
 
             modality_array = np.asarray(
                 modality_image,
@@ -688,19 +597,16 @@ if uploaded_file is not None:
             )
 
 
-            # =================================================
-            # IMPORTANT PREPROCESSING
-            # =================================================
+            # -------------------------------------------------
+            # IMPORTANT
             #
-            # Your training code uses:
+            # Your training code used:
             #
-            # rescale=1.0/255.0
+            # rescale=1.0 / 255.0
             #
             # Therefore DO NOT use MobileNetV2
-            # preprocess_input() here.
-            #
-            # This is a critical correction.
-            # =================================================
+            # preprocess_input here.
+            # -------------------------------------------------
 
             modality_array = (
                 modality_array / 255.0
@@ -714,7 +620,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # MODALITY PREDICTION
+            # PREDICT MODALITY
             # =================================================
 
             with st.spinner(
@@ -735,30 +641,25 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # OUTPUT VALIDATION
+            # CHECK OUTPUT
             # =================================================
 
-            if modality_prediction.ndim != 2:
+            if (
+                modality_prediction.ndim != 2
+                or
+                modality_prediction.shape[1] != 3
+            ):
 
                 st.error(
                     "Invalid modality model output."
                 )
 
-                st.stop()
-
-
-            if (
-                modality_prediction.shape[1]
-                != 3
-            ):
-
-                st.error(
-                    "The loaded modality model "
-                    "does not have 3 outputs."
+                st.write(
+                    "Expected output: (1, 3)"
                 )
 
                 st.write(
-                    "Output shape:",
+                    "Actual output:",
                     modality_prediction.shape
                 )
 
@@ -775,24 +676,19 @@ if uploaded_file is not None:
             )
 
 
-            # =================================================
-            # SOFTMAX SAFETY CHECK
-            # =================================================
+            # -------------------------------------------------
+            # Safety normalization
+            # -------------------------------------------------
 
             if (
-
                 np.any(
                     modality_probabilities < 0
                 )
-
                 or
-
                 np.any(
                     modality_probabilities > 1
                 )
-
                 or
-
                 not np.isclose(
                     np.sum(
                         modality_probabilities
@@ -800,7 +696,6 @@ if uploaded_file is not None:
                     1.0,
                     atol=1e-3
                 )
-
             ):
 
                 modality_probabilities = (
@@ -811,7 +706,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # CLASS PROBABILITIES
+            # EXTRACT PROBABILITIES
             # =================================================
 
             chest_xray_probability = float(
@@ -828,7 +723,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # PREDICTED CLASS
+            # PREDICTED MODALITY
             # =================================================
 
             predicted_index = int(
@@ -837,13 +732,11 @@ if uploaded_file is not None:
                 )
             )
 
-
             predicted_modality = (
                 MODALITY_CLASS_NAMES[
                     predicted_index
                 ]
             )
-
 
             predicted_confidence = float(
                 modality_probabilities[
@@ -884,14 +777,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # DECISION
-            # =================================================
-            #
-            # Chest X-ray is accepted ONLY when:
-            #
-            # 1. Chest X-ray is the highest probability
-            # 2. X-ray probability >= threshold
-            #
+            # CHEST X-RAY DECISION
             # =================================================
 
             is_chest_xray = (
@@ -909,15 +795,19 @@ if uploaded_file is not None:
             # CT DETECTED
             # =================================================
 
-            if predicted_index == 1:
+            if (
+                predicted_modality
+                == "CT"
+            ):
 
                 st.error(
-                    "❌ CT Scan image detected."
+                    "CT Scan detected."
                 )
 
                 st.warning(
                     "This application accepts only "
-                    "Chest X-ray images for pneumonia detection."
+                    "Chest X-ray images for pneumonia "
+                    "detection."
                 )
 
                 st.write(
@@ -927,10 +817,9 @@ if uploaded_file is not None:
 
 
                 history_entry = (
-                    "CT detected - "
+                    f"Rejected - CT - "
                     f"{uploaded_file.name}"
                 )
-
 
                 if (
                     history_entry
@@ -941,7 +830,6 @@ if uploaded_file is not None:
                         history_entry
                     )
 
-
                 st.stop()
 
 
@@ -949,15 +837,19 @@ if uploaded_file is not None:
             # MRI DETECTED
             # =================================================
 
-            if predicted_index == 2:
+            if (
+                predicted_modality
+                == "MRI"
+            ):
 
                 st.error(
-                    "❌ MRI image detected."
+                    "MRI image detected."
                 )
 
                 st.warning(
                     "This application accepts only "
-                    "Chest X-ray images for pneumonia detection."
+                    "Chest X-ray images for pneumonia "
+                    "detection."
                 )
 
                 st.write(
@@ -967,10 +859,9 @@ if uploaded_file is not None:
 
 
                 history_entry = (
-                    "MRI detected - "
+                    f"Rejected - MRI - "
                     f"{uploaded_file.name}"
                 )
-
 
                 if (
                     history_entry
@@ -981,18 +872,17 @@ if uploaded_file is not None:
                         history_entry
                     )
 
-
                 st.stop()
 
 
             # =================================================
-            # LOW-CONFIDENCE MODALITY
+            # CHEST X-RAY NOT CONFIDENT ENOUGH
             # =================================================
 
             if not is_chest_xray:
 
                 st.error(
-                    "❌ Image could not be confidently "
+                    "The image could not be confidently "
                     "identified as a Chest X-ray."
                 )
 
@@ -1006,16 +896,14 @@ if uploaded_file is not None:
                 )
 
                 st.write(
-                    f"Confidence: "
+                    f"Predicted confidence: "
                     f"{predicted_confidence * 100:.2f}%"
                 )
 
-
                 history_entry = (
-                    "Low confidence - "
+                    f"Rejected - Low X-ray confidence - "
                     f"{uploaded_file.name}"
                 )
-
 
                 if (
                     history_entry
@@ -1026,7 +914,6 @@ if uploaded_file is not None:
                         history_entry
                     )
 
-
                 st.stop()
 
 
@@ -1035,7 +922,7 @@ if uploaded_file is not None:
             # =================================================
 
             st.success(
-                "✅ Chest X-ray image detected."
+                "Chest X-ray detected."
             )
 
             st.write(
@@ -1054,16 +941,13 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # PREPARE PNEUMONIA INPUT
+            # PREPARE PNEUMONIA IMAGE
             # =================================================
 
-            pneumonia_image = (
-                model_image.resize(
-                    PNEUMONIA_IMAGE_SIZE,
-                    Image.Resampling.LANCZOS
-                )
+            pneumonia_image = rgb_image.resize(
+                PNEUMONIA_IMAGE_SIZE,
+                Image.Resampling.LANCZOS
             )
-
 
             pneumonia_array = np.asarray(
                 pneumonia_image,
@@ -1072,7 +956,7 @@ if uploaded_file is not None:
 
 
             # -------------------------------------------------
-            # Your pneumonia model uses /255 preprocessing
+            # Your previous pneumonia app used /255.0
             # -------------------------------------------------
 
             pneumonia_array = (
@@ -1113,16 +997,16 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # HANDLE MODEL OUTPUT
+            # HANDLE PNEUMONIA MODEL OUTPUT
             # =================================================
             #
-            # Supports:
+            # Supported:
             #
-            # 1. Binary sigmoid:
-            #       [pneumonia_probability]
+            # 1. Sigmoid:
+            #    [Pneumonia probability]
             #
             # 2. Two-class softmax:
-            #       [normal, pneumonia]
+            #    [Normal, Pneumonia]
             #
             # =================================================
 
@@ -1131,7 +1015,7 @@ if uploaded_file is not None:
 
 
             # -------------------------------------------------
-            # SINGLE OUTPUT
+            # Single sigmoid output
             # -------------------------------------------------
 
             if prediction_values.size == 1:
@@ -1140,24 +1024,13 @@ if uploaded_file is not None:
                     prediction_values
                 )
 
-                # If the model output is outside
-                # probability range, apply sigmoid.
-                if (
-                    pneumonia_probability < 0
-                    or
-                    pneumonia_probability > 1
-                ):
-
-                    pneumonia_probability = (
-                        1.0 /
-                        (
-                            1.0
-                            +
-                            np.exp(
-                                -pneumonia_probability
-                            )
-                        )
+                pneumonia_probability = float(
+                    np.clip(
+                        pneumonia_probability,
+                        0.0,
+                        1.0
                     )
+                )
 
                 normal_probability = (
                     1.0
@@ -1167,7 +1040,7 @@ if uploaded_file is not None:
 
 
             # -------------------------------------------------
-            # TWO OUTPUTS
+            # Two-class output
             # -------------------------------------------------
 
             elif prediction_values.size == 2:
@@ -1177,6 +1050,8 @@ if uploaded_file is not None:
                     .astype(np.float64)
                 )
 
+
+                # Already probabilities?
 
                 if (
 
@@ -1202,13 +1077,13 @@ if uploaded_file is not None:
 
                 ):
 
-                    probabilities = (
+                    pneumonia_probabilities = (
                         probabilities
                     )
 
                 else:
 
-                    probabilities = (
+                    pneumonia_probabilities = (
                         tf.nn.softmax(
                             probabilities
                         ).numpy()
@@ -1216,18 +1091,18 @@ if uploaded_file is not None:
 
 
                 # ------------------------------------------------
-                # ASSUMED TRAINING CLASS ORDER:
+                # Expected mapping from your previous model:
                 #
-                # NORMAL = 0
-                # PNEUMONIA = 1
+                # 0 = Normal
+                # 1 = Pneumonia
                 # ------------------------------------------------
 
                 normal_probability = float(
-                    probabilities[0]
+                    pneumonia_probabilities[0]
                 )
 
                 pneumonia_probability = float(
-                    probabilities[1]
+                    pneumonia_probabilities[1]
                 )
 
 
@@ -1238,7 +1113,7 @@ if uploaded_file is not None:
                 )
 
                 st.write(
-                    "Output shape:",
+                    "Model output shape:",
                     prediction.shape
                 )
 
@@ -1246,7 +1121,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # CLAMP PROBABILITIES
+            # FINAL SAFETY
             # =================================================
 
             normal_probability = float(
@@ -1275,7 +1150,9 @@ if uploaded_file is not None:
                 >= PNEUMONIA_THRESHOLD
             ):
 
-                diagnosis = "Pneumonia"
+                diagnosis = (
+                    "Pneumonia"
+                )
 
                 diagnosis_confidence = (
                     pneumonia_probability
@@ -1283,7 +1160,9 @@ if uploaded_file is not None:
 
             else:
 
-                diagnosis = "Normal"
+                diagnosis = (
+                    "Normal"
+                )
 
                 diagnosis_confidence = (
                     normal_probability
@@ -1293,6 +1172,11 @@ if uploaded_file is not None:
             # =================================================
             # DISPLAY DIAGNOSIS
             # =================================================
+
+            st.subheader(
+                "Final Result"
+            )
+
 
             if diagnosis == "Pneumonia":
 
@@ -1307,22 +1191,13 @@ if uploaded_file is not None:
                 )
 
 
-            # =================================================
-            # FINAL RESULT
-            # =================================================
-
-            st.subheader(
-                "Final Result"
-            )
-
-
             col1, col2, col3 = st.columns(3)
 
 
             with col1:
 
                 st.metric(
-                    "X-ray Confidence",
+                    "Chest X-ray",
                     f"{chest_xray_probability * 100:.2f}%"
                 )
 
@@ -1344,11 +1219,6 @@ if uploaded_file is not None:
 
 
             st.write(
-                f"**Image Modality:** "
-                f"Chest X-ray"
-            )
-
-            st.write(
                 f"**Final Diagnosis:** "
                 f"{diagnosis}"
             )
@@ -1367,7 +1237,6 @@ if uploaded_file is not None:
                 f"{diagnosis} - "
                 f"{uploaded_file.name}"
             )
-
 
             if (
                 history_entry
@@ -1389,11 +1258,9 @@ if uploaded_file is not None:
                 "Diagnostic Report"
             )
 
-
-            report_time = datetime.now().strftime(
+            report_date = datetime.now().strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-
 
             st.write(
                 f"**File:** "
@@ -1402,12 +1269,11 @@ if uploaded_file is not None:
 
             st.write(
                 f"**Date:** "
-                f"{report_time}"
+                f"{report_date}"
             )
 
             st.write(
-                "**Image Modality:** "
-                "Chest X-ray"
+                "**Image Modality:** Chest X-ray"
             )
 
             st.write(
@@ -1437,7 +1303,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # PDF REPORT
+            # CREATE PDF REPORT
             # =================================================
 
             clean_filename = (
@@ -1451,19 +1317,18 @@ if uploaded_file is not None:
                 )
             )
 
+            if not clean_filename:
 
-            # Remove problematic characters
-            clean_filename = (
+                clean_filename = "uploaded_image"
+
+
+            # -------------------------------------------------
+            # Remove extension for report filename
+            # -------------------------------------------------
+
+            report_base_name = os.path.splitext(
                 clean_filename
-                .replace(
-                    ".",
-                    "_"
-                )
-                .replace(
-                    " ",
-                    "_"
-                )
-            )
+            )[0]
 
 
             pdf = FPDF()
@@ -1472,7 +1337,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # PDF TITLE
+            # TITLE
             # =================================================
 
             pdf.set_font(
@@ -1498,9 +1363,7 @@ if uploaded_file is not None:
             )
 
 
-            pdf.ln(
-                10
-            )
+            pdf.ln(10)
 
 
             # =================================================
@@ -1510,26 +1373,26 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
-                "Date:",
+                55,
+                10,
+                "Report Date:",
                 ln=False
             )
 
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
-                report_time,
+                10,
+                report_date,
                 ln=True
             )
 
@@ -1541,12 +1404,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "File Name:",
                 ln=False
             )
@@ -1554,12 +1417,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
+                10,
                 clean_filename,
                 ln=True
             )
@@ -1572,12 +1435,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "Image Modality:",
                 ln=False
             )
@@ -1585,12 +1448,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
+                10,
                 "Chest X-ray",
                 ln=True
             )
@@ -1603,12 +1466,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "X-ray Confidence:",
                 ln=False
             )
@@ -1616,15 +1479,13 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
-                (
-                    f"{chest_xray_probability * 100:.2f}%"
-                ),
+                10,
+                f"{chest_xray_probability * 100:.2f}%",
                 ln=True
             )
 
@@ -1636,12 +1497,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "Normal Probability:",
                 ln=False
             )
@@ -1649,15 +1510,13 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
-                (
-                    f"{normal_probability * 100:.2f}%"
-                ),
+                10,
+                f"{normal_probability * 100:.2f}%",
                 ln=True
             )
 
@@ -1669,12 +1528,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "Pneumonia Probability:",
                 ln=False
             )
@@ -1682,15 +1541,13 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
-                (
-                    f"{pneumonia_probability * 100:.2f}%"
-                ),
+                10,
+                f"{pneumonia_probability * 100:.2f}%",
                 ln=True
             )
 
@@ -1702,12 +1559,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "Diagnosis:",
                 ln=False
             )
@@ -1715,12 +1572,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
+                10,
                 diagnosis,
                 ln=True
             )
@@ -1733,12 +1590,12 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "B",
-                11
+                12
             )
 
             pdf.cell(
-                50,
-                8,
+                55,
+                10,
                 "Diagnosis Confidence:",
                 ln=False
             )
@@ -1746,15 +1603,13 @@ if uploaded_file is not None:
             pdf.set_font(
                 "Arial",
                 "",
-                11
+                12
             )
 
             pdf.cell(
                 0,
-                8,
-                (
-                    f"{diagnosis_confidence * 100:.2f}%"
-                ),
+                10,
+                f"{diagnosis_confidence * 100:.2f}%",
                 ln=True
             )
 
@@ -1763,53 +1618,29 @@ if uploaded_file is not None:
             # DISCLAIMER
             # =================================================
 
-            pdf.ln(
-                15
-            )
+            pdf.ln(15)
 
             pdf.set_font(
                 "Arial",
                 "I",
-                9
+                10
             )
 
             pdf.multi_cell(
                 0,
-                6,
-                (
-                    "Disclaimer: This AI-generated result "
-                    "is intended for research purposes only "
-                    "and does not replace professional "
-                    "medical diagnosis."
-                )
+                7,
+                "Disclaimer: This AI-generated result "
+                "is intended for research purposes only "
+                "and does not replace professional "
+                "medical diagnosis."
             )
 
 
             # =================================================
-            # GENERATE PDF
+            # PDF OUTPUT
             # =================================================
 
-            pdf_output = pdf.output(
-                dest="S"
-            )
-
-
-            if isinstance(
-                pdf_output,
-                str
-            ):
-
-                pdf_bytes = (
-                    pdf_output.encode(
-                        "latin-1"
-                    )
-                )
-
-            else:
-
-                pdf_bytes = bytes(
-                    pdf_output
-                )
+            pdf_output = pdf.output()
 
 
             # =================================================
@@ -1819,28 +1650,29 @@ if uploaded_file is not None:
             st.download_button(
 
                 label=(
-                    "Download Diagnostic Report (PDF)"
+                    "Download Diagnostic Report"
                 ),
 
-                data=pdf_bytes,
+                data=bytes(
+                    pdf_output
+                ),
 
                 file_name=(
-                    f"Report_{clean_filename}.pdf"
+                    f"Report_"
+                    f"{report_base_name}.pdf"
                 ),
 
-                mime="application/pdf"
+                mime="application/pdf",
+
+                use_container_width=True
             )
 
-
-    # ========================================================
-    # ERROR HANDLING
-    # ========================================================
 
     except Exception as e:
 
         st.error(
             "An error occurred while processing "
-            "the image."
+            "the uploaded image."
         )
 
         st.exception(e)
