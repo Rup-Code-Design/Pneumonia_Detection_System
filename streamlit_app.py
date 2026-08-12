@@ -199,7 +199,7 @@ def load_pneumonia_model():
 
 try:
 
-    modality_model = load_modality_model()
+    modality_model = modality_classifier_model()
 
     xray_model = load_xray_model()
 
