@@ -96,7 +96,7 @@ MODALITY_CLASS_NAMES = [
 # The predicted class must be CHEST_XRAY
 # AND its probability must reach this threshold.
 
-CHEST_XRAY_THRESHOLD = 0.50
+CHEST_XRAY_THRESHOLD = 0.10
 
 
 # Pneumonia decision threshold.
