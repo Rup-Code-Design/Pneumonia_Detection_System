@@ -1,52 +1,53 @@
 # ============================================================
 # modality_model_builder.py
+#
+# 3-Class Medical Image Modality Classifier
+#
+# Classes:
+#   0 = CHEST_XRAY
+#   1 = CT
+#   2 = MRI
 # ============================================================
 
 import tensorflow as tf
-from tensorflow.keras import Model
-from tensorflow.keras import layers
+from tensorflow.keras import layers, Model
 
 
 def build_modality_classifier(
     input_shape=(224, 224, 3),
     num_classes=3
 ):
+    """
+    Build the modality classifier.
 
-    print("================================================")
-    print("MODALITY MODEL BUILDER LOADED")
-    print("input_shape:", input_shape)
-    print("num_classes:", num_classes)
-    print("================================================")
+    IMPORTANT:
+    This function MUST return a Keras Model.
+    """
 
     if num_classes != 3:
         raise ValueError(
-            "Modality classifier requires exactly 3 classes:\n"
+            "This modality classifier requires exactly 3 classes:\n"
             "0 = CHEST_XRAY\n"
             "1 = CT\n"
             "2 = MRI"
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # INPUT
-    # --------------------------------------------------------
+    # ========================================================
 
     inputs = layers.Input(
         shape=input_shape,
         name="image_input"
     )
 
-    # --------------------------------------------------------
-    # FIRST CONVOLUTION
-    #
-    # Your saved weights previously showed:
-    #
-    # (3, 3, 3, 32)
-    #
-    # --------------------------------------------------------
+    # ========================================================
+    # BLOCK 1
+    # ========================================================
 
     x = layers.Conv2D(
         32,
-        3,
+        kernel_size=3,
         strides=2,
         padding="same",
         use_bias=False,
@@ -62,13 +63,13 @@ def build_modality_classifier(
         name="activation"
     )(x)
 
-    # --------------------------------------------------------
-    # FEATURE BLOCK
-    # --------------------------------------------------------
+    # ========================================================
+    # BLOCK 2
+    # ========================================================
 
     x = layers.SeparableConv2D(
         64,
-        3,
+        kernel_size=3,
         padding="same",
         use_bias=False,
         name="separable_conv2d"
@@ -83,13 +84,13 @@ def build_modality_classifier(
         name="activation_1"
     )(x)
 
-    # --------------------------------------------------------
-    # SECOND BLOCK
-    # --------------------------------------------------------
+    # ========================================================
+    # BLOCK 3
+    # ========================================================
 
     x = layers.SeparableConv2D(
         128,
-        3,
+        kernel_size=3,
         strides=2,
         padding="same",
         use_bias=False,
@@ -105,13 +106,13 @@ def build_modality_classifier(
         name="activation_2"
     )(x)
 
-    # --------------------------------------------------------
-    # FEATURE BLOCK
-    # --------------------------------------------------------
+    # ========================================================
+    # BLOCK 4
+    # ========================================================
 
     x = layers.Conv2D(
         256,
-        3,
+        kernel_size=3,
         strides=2,
         padding="same",
         use_bias=False,
@@ -127,11 +128,11 @@ def build_modality_classifier(
         name="activation_3"
     )(x)
 
-    # --------------------------------------------------------
+    # ========================================================
     # SE ATTENTION
-    # --------------------------------------------------------
+    # ========================================================
 
-    channels = x.shape[-1]
+    channels = int(x.shape[-1])
 
     se = layers.GlobalAveragePooling2D(
         name="global_average_pooling2d"
@@ -156,18 +157,15 @@ def build_modality_classifier(
 
     x = layers.Multiply(
         name="multiply"
-    )([
-        x,
-        se
-    ])
+    )([x, se])
 
-    # --------------------------------------------------------
-    # HIGH LEVEL FEATURES
-    # --------------------------------------------------------
+    # ========================================================
+    # BLOCK 5
+    # ========================================================
 
     x = layers.Conv2D(
         512,
-        3,
+        kernel_size=3,
         strides=2,
         padding="same",
         use_bias=False,
@@ -183,17 +181,17 @@ def build_modality_classifier(
         name="activation_4"
     )(x)
 
-    # --------------------------------------------------------
-    # GLOBAL POOLING
-    # --------------------------------------------------------
+    # ========================================================
+    # GLOBAL FEATURES
+    # ========================================================
 
     x = layers.GlobalAveragePooling2D(
         name="global_average_pooling2d_1"
     )(x)
 
-    # --------------------------------------------------------
+    # ========================================================
     # CLASSIFICATION HEAD
-    # --------------------------------------------------------
+    # ========================================================
 
     x = layers.Dense(
         256,
@@ -206,10 +204,6 @@ def build_modality_classifier(
         name="dropout"
     )(x)
 
-    # --------------------------------------------------------
-    # MODALITY HEAD
-    # --------------------------------------------------------
-
     x = layers.Dense(
         128,
         activation=tf.keras.activations.gelu,
@@ -220,15 +214,19 @@ def build_modality_classifier(
         name="modality_batch_normalization"
     )(x)
 
+    # ========================================================
+    # OUTPUT
+    # ========================================================
+
     outputs = layers.Dense(
         3,
         activation="softmax",
         name="modality_probability"
     )(x)
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE MODEL
-    # --------------------------------------------------------
+    # ========================================================
 
     model = Model(
         inputs=inputs,
@@ -236,16 +234,8 @@ def build_modality_classifier(
         name="Medical_Image_Modality_Classifier"
     )
 
-    # --------------------------------------------------------
-    # DEBUG
-    # --------------------------------------------------------
-
-    print("MODEL CREATED SUCCESSFULLY")
-    print("Model type:", type(model))
-    print("Output shape:", model.output_shape)
-
-    # --------------------------------------------------------
-    # THIS MUST BE AT FUNCTION LEVEL
-    # --------------------------------------------------------
+    # ========================================================
+    # CRITICAL
+    # ========================================================
 
     return model
