@@ -14,33 +14,11 @@
 #       ↓
 # X-RAY VERIFICATION DECISION
 #       ↓
-# If X-ray → Pneumonia Model
+# If verified X-ray
+#       ↓
+# Proposed Pneumonia Model
 #       ↓
 # Normal / Pneumonia
-#
-# Proposed Pneumonia Model:
-#
-# Xception Block 64
-#       ↓
-# MaxPooling
-#       ↓
-# Xception Block 128
-#       ↓
-# MaxPooling
-#       ↓
-# Residual Block 256
-#       ↓
-# GAP + GMP
-#       ↓
-# Concatenate
-#       ↓
-# BatchNormalization
-#       ↓
-# Dense 128 + GELU
-#       ↓
-# Dropout
-#       ↓
-# Softmax
 #
 # ============================================================
 
@@ -103,33 +81,56 @@ PNEUMONIA_IMAGE_SIZE = (224, 224)
 
 
 # ============================================================
+# ============================================================
 # X-RAY VERIFIER CLASS MAPPING
 # ============================================================
 #
-# IMPORTANT
+# THIS IS THE MOST IMPORTANT SETTING.
 #
-# This MUST match the training class_indices.
-#
-# Expected:
+# If your X-ray verifier was trained using:
 #
 # NON_XRAY = 0
 # XRAY     = 1
 #
-# If your verifier was trained with the opposite mapping,
-# change these indices.
+# keep:
+#
+# XRAY_CLASS_INDEX = 1
+# NON_XRAY_CLASS_INDEX = 0
+#
+#
+# If your training class_indices was:
+#
+# XRAY     = 0
+# NON_XRAY = 1
+#
+# change to:
+#
+# XRAY_CLASS_INDEX = 0
+# NON_XRAY_CLASS_INDEX = 1
+#
 # ============================================================
+# ============================================================
+
+XRAY_CLASS_INDEX = 1
+
+NON_XRAY_CLASS_INDEX = 0
+
 
 XRAY_CLASS_MAP = {
     0: "NON-XRAY",
     1: "X-RAY"
 }
 
-NON_XRAY_CLASS_INDEX = 0
-XRAY_CLASS_INDEX = 1
-
 
 # ============================================================
 # PNEUMONIA CLASS MAPPING
+# ============================================================
+#
+# Expected:
+#
+# 0 = Normal
+# 1 = Pneumonia
+#
 # ============================================================
 
 PNEUMONIA_CLASS_MAP = {
@@ -142,14 +143,8 @@ PNEUMONIA_CLASS_MAP = {
 # X-RAY VERIFICATION SETTINGS
 # ============================================================
 
-# Minimum probability for X-ray acceptance.
-#
-# 0.50 means X-ray probability must be at least 50%.
 XRAY_ACCEPT_THRESHOLD = 0.50
 
-
-# Require X-ray probability to be greater than
-# Non-X-ray probability.
 REQUIRE_XRAY_DOMINANCE = True
 
 
@@ -227,22 +222,6 @@ def load_xray_model():
 
 # ============================================================
 # LOAD PROPOSED PNEUMONIA MODEL
-# ============================================================
-#
-# Architecture:
-#
-# Xception Block 64
-# MaxPooling
-# Xception Block 128
-# MaxPooling
-# Residual Block 256
-# GAP + GMP
-# Concatenate
-# BatchNormalization
-# Dense 128 + GELU
-# Dropout 0.3
-# Dense 2 + Softmax
-#
 # ============================================================
 
 @st.cache_resource
@@ -368,20 +347,11 @@ except Exception as e:
 
 def check_grayscale_image(image):
 
-    """
-    Determines whether the image is effectively grayscale.
-
-    A grayscale image saved as RGB is accepted.
-
-    A genuine colour image is rejected.
-
-    This function does NOT determine whether an image
-    is an X-ray.
-    """
-
     try:
 
-        rgb_image = image.convert("RGB")
+        rgb_image = image.convert(
+            "RGB"
+        )
 
         rgb_array = np.asarray(
             rgb_image,
@@ -442,10 +412,6 @@ def check_grayscale_image(image):
 
 def validate_image(image):
 
-    # --------------------------------------------------------
-    # IMAGE SIZE
-    # --------------------------------------------------------
-
     width, height = image.size
 
     if width < 64 or height < 64:
@@ -457,11 +423,13 @@ def validate_image(image):
 
 
     # --------------------------------------------------------
-    # GRAYSCALE CHECK
+    # GRAYSCALE
     # --------------------------------------------------------
 
     is_grayscale, message = (
-        check_grayscale_image(image)
+        check_grayscale_image(
+            image
+        )
     )
 
     if not is_grayscale:
@@ -476,7 +444,9 @@ def validate_image(image):
     # GRAYSCALE ARRAY
     # --------------------------------------------------------
 
-    gray = image.convert("L")
+    gray = image.convert(
+        "L"
+    )
 
     gray_array = np.asarray(
         gray,
@@ -539,12 +509,14 @@ def validate_image(image):
 
 
 # ============================================================
-# PREPROCESS FOR X-RAY VERIFIER
+# PREPROCESS X-RAY VERIFIER
 # ============================================================
 
 def preprocess_for_xray_verifier(image):
 
-    image = image.convert("RGB")
+    image = image.convert(
+        "RGB"
+    )
 
     image = image.resize(
         XRAY_IMAGE_SIZE,
@@ -556,7 +528,9 @@ def preprocess_for_xray_verifier(image):
         dtype=np.float32
     )
 
-    # Must match verifier training preprocessing.
+    # IMPORTANT:
+    # Must match X-ray verifier training.
+
     image_array /= 255.0
 
     image_array = np.expand_dims(
@@ -568,12 +542,14 @@ def preprocess_for_xray_verifier(image):
 
 
 # ============================================================
-# PREPROCESS FOR PNEUMONIA MODEL
+# PREPROCESS PNEUMONIA MODEL
 # ============================================================
 
 def preprocess_for_pneumonia(image):
 
-    image = image.convert("RGB")
+    image = image.convert(
+        "RGB"
+    )
 
     image = image.resize(
         PNEUMONIA_IMAGE_SIZE,
@@ -585,7 +561,8 @@ def preprocess_for_pneumonia(image):
         dtype=np.float32
     )
 
-    # Must match pneumonia model training preprocessing.
+    # Must match pneumonia training preprocessing.
+
     image_array /= 255.0
 
     image_array = np.expand_dims(
@@ -597,7 +574,7 @@ def preprocess_for_pneumonia(image):
 
 
 # ============================================================
-# SOFTMAX / PROBABILITY CONVERSION
+# CONVERT OUTPUT TO PROBABILITIES
 # ============================================================
 
 def convert_to_probabilities(raw_scores):
@@ -607,14 +584,21 @@ def convert_to_probabilities(raw_scores):
         dtype=np.float64
     )
 
+    # --------------------------------------------------------
     # Already probabilities
+    # --------------------------------------------------------
+
     if (
 
-        np.all(raw_scores >= 0.0)
+        np.all(
+            raw_scores >= 0.0
+        )
 
         and
 
-        np.all(raw_scores <= 1.0)
+        np.all(
+            raw_scores <= 1.0
+        )
 
         and
 
@@ -629,14 +613,27 @@ def convert_to_probabilities(raw_scores):
         return raw_scores
 
 
+    # --------------------------------------------------------
     # Otherwise treat as logits
+    # --------------------------------------------------------
+
     return tf.nn.softmax(
         raw_scores
     ).numpy()
 
 
 # ============================================================
-# X-RAY VERIFICATION
+# ============================================================
+# X-RAY VERIFICATION DECISION
+# ============================================================
+#
+# This is the critical section.
+#
+# We do NOT attempt to identify MRI/CT using image
+# brightness, contrast, aspect ratio, etc.
+#
+# The trained X-ray verifier makes the modality decision.
+#
 # ============================================================
 
 def verify_xray(image):
@@ -667,7 +664,7 @@ def verify_xray(image):
 
 
     # --------------------------------------------------------
-    # OUTPUT CHECK
+    # OUTPUT VALIDATION
     # --------------------------------------------------------
 
     if (
@@ -681,9 +678,19 @@ def verify_xray(image):
     ):
 
         raise ValueError(
-            "X-ray verifier must produce "
-            "exactly 2 outputs."
+            "X-ray verifier must produce exactly "
+            "2 output values."
         )
+
+
+    # --------------------------------------------------------
+    # RAW MODEL OUTPUT
+    # --------------------------------------------------------
+
+    raw_scores = (
+        predictions[0]
+        .astype(np.float64)
+    )
 
 
     # --------------------------------------------------------
@@ -692,23 +699,14 @@ def verify_xray(image):
 
     probabilities = (
         convert_to_probabilities(
-            predictions[0]
+            raw_scores
         )
     )
 
 
     # --------------------------------------------------------
-    # EXPLICIT PROBABILITIES
-    #
-    # 0 = NON-XRAY
-    # 1 = XRAY
+    # CLASS-SPECIFIC PROBABILITIES
     # --------------------------------------------------------
-
-    non_xray_probability = float(
-        probabilities[
-            NON_XRAY_CLASS_INDEX
-        ]
-    )
 
     xray_probability = float(
         probabilities[
@@ -716,9 +714,15 @@ def verify_xray(image):
         ]
     )
 
+    non_xray_probability = float(
+        probabilities[
+            NON_XRAY_CLASS_INDEX
+        ]
+    )
+
 
     # --------------------------------------------------------
-    # RAW MODEL CLASS
+    # RAW MODEL PREDICTION
     # --------------------------------------------------------
 
     predicted_index = int(
@@ -727,27 +731,23 @@ def verify_xray(image):
         )
     )
 
-    predicted_class = XRAY_CLASS_MAP.get(
-        predicted_index,
-        "UNKNOWN"
+    predicted_class = (
+        XRAY_CLASS_MAP.get(
+            predicted_index,
+            "UNKNOWN"
+        )
     )
 
 
     # ========================================================
-    # X-RAY DECISION LOGIC
+    # DECISION CONDITIONS
     # ========================================================
-
-    # Condition 1:
-    # X-ray probability must reach threshold.
 
     threshold_pass = (
         xray_probability
         >= XRAY_ACCEPT_THRESHOLD
     )
 
-
-    # Condition 2:
-    # X-ray probability must beat non-X-ray probability.
 
     dominance_pass = (
         xray_probability
@@ -756,49 +756,69 @@ def verify_xray(image):
     )
 
 
-    # Final decision
+    # --------------------------------------------------------
+    # FINAL DECISION
+    # --------------------------------------------------------
 
     if REQUIRE_XRAY_DOMINANCE:
 
         is_xray = (
+
             threshold_pass
+
             and
+
             dominance_pass
+
         )
 
     else:
 
-        is_xray = threshold_pass
+        is_xray = (
+            threshold_pass
+        )
 
 
     # --------------------------------------------------------
-    # FINAL CLASS
+    # RESULT
     # --------------------------------------------------------
 
     if is_xray:
 
         result = "X-RAY"
 
-        confidence = xray_probability
+        confidence = (
+            xray_probability
+        )
 
     else:
 
         result = "NON-XRAY"
 
-        confidence = non_xray_probability
+        confidence = (
+            non_xray_probability
+        )
 
 
     return {
 
-        "result": result,
+        "result":
+            result,
 
-        "confidence": confidence,
+        "confidence":
+            confidence,
 
-        "probabilities": probabilities,
+        "probabilities":
+            probabilities,
 
-        "is_xray": is_xray,
+        "raw_scores":
+            raw_scores,
 
-        "xray_probability": xray_probability,
+        "is_xray":
+            is_xray,
+
+        "xray_probability":
+            xray_probability,
 
         "non_xray_probability":
             non_xray_probability,
@@ -818,7 +838,7 @@ def verify_xray(image):
 
 
 # ============================================================
-# PROPOSED PNEUMONIA MODEL
+# PNEUMONIA PREDICTION
 # ============================================================
 
 def predict_pneumonia(image):
@@ -838,9 +858,11 @@ def predict_pneumonia(image):
     # MODEL PREDICTION
     # --------------------------------------------------------
 
-    prediction = pneumonia_model.predict(
-        image_array,
-        verbose=0
+    prediction = (
+        pneumonia_model.predict(
+            image_array,
+            verbose=0
+        )
     )
 
     prediction = np.asarray(
@@ -849,7 +871,7 @@ def predict_pneumonia(image):
 
 
     # --------------------------------------------------------
-    # OUTPUT CHECK
+    # OUTPUT VALIDATION
     # --------------------------------------------------------
 
     if (
@@ -863,8 +885,8 @@ def predict_pneumonia(image):
     ):
 
         raise ValueError(
-            "Pneumonia model must produce "
-            "exactly 2 outputs."
+            "Pneumonia model must produce exactly "
+            "2 output values."
         )
 
 
@@ -908,7 +930,7 @@ def predict_pneumonia(image):
 
 
     # --------------------------------------------------------
-    # INDIVIDUAL PROBABILITIES
+    # CLASS PROBABILITIES
     # --------------------------------------------------------
 
     normal_probability = float(
@@ -921,10 +943,15 @@ def predict_pneumonia(image):
 
 
     return (
+
         predicted_class,
+
         confidence,
+
         normal_probability,
+
         pneumonia_probability
+
     )
 
 
@@ -961,6 +988,7 @@ with st.sidebar:
         "Pneumonia AI Pipeline"
     )
 
+
     st.write(
         """
         Image Upload
@@ -981,11 +1009,14 @@ with st.sidebar:
         """
     )
 
+
     st.divider()
 
+
     st.write(
-        "**Proposed Model**"
+        "**Proposed Pneumonia Model**"
     )
+
 
     st.write(
         """
@@ -997,43 +1028,45 @@ with st.sidebar:
         """
     )
 
+
     st.divider()
+
 
     st.write(
         "**Output Classes**"
     )
 
+
     st.write(
         "Normal"
     )
+
 
     st.write(
         "Pneumonia"
     )
 
+
     st.divider()
+
 
     st.write(
         "**Rejected**"
     )
 
+
     st.write(
         "Colour images"
     )
 
-    st.write(
-        "MRI"
-    )
 
     st.write(
-        "CT"
+        "Non-X-ray images"
     )
 
-    st.write(
-        "Other non-X-ray images"
-    )
 
     st.divider()
+
 
     st.caption(
         "Research prototype. "
@@ -1057,6 +1090,7 @@ with st.expander(
         "best_xray_verifier.weights.h5"
     )
 
+
     st.write(
         "Pneumonia model:"
     )
@@ -1064,6 +1098,7 @@ with st.expander(
     st.code(
         "best_xception_pneumonia_model.keras"
     )
+
 
     st.write(
         "X-ray verifier input:"
@@ -1073,6 +1108,7 @@ with st.expander(
         "128 × 128 × 3"
     )
 
+
     st.write(
         "Pneumonia model input:"
     )
@@ -1080,6 +1116,19 @@ with st.expander(
     st.write(
         "224 × 224 × 3"
     )
+
+
+    st.write(
+        "X-ray class mapping:"
+    )
+
+    st.code(
+        f"""
+NON-XRAY = {NON_XRAY_CLASS_INDEX}
+X-RAY     = {XRAY_CLASS_INDEX}
+"""
+    )
+
 
     st.write(
         "X-ray acceptance threshold:"
@@ -1089,16 +1138,20 @@ with st.expander(
         f"{XRAY_ACCEPT_THRESHOLD * 100:.0f}%"
     )
 
+
     st.write(
-        "X-ray dominance requirement:"
+        "X-ray dominance:"
     )
 
     st.write(
-        str(REQUIRE_XRAY_DOMINANCE)
+        str(
+            REQUIRE_XRAY_DOMINANCE
+        )
     )
 
+
     st.write(
-        "Proposed architecture:"
+        "Pneumonia architecture:"
     )
 
     st.write(
@@ -1114,6 +1167,7 @@ with st.expander(
         "Softmax"
     )
 
+
     st.write(
         "Attention:"
     )
@@ -1122,8 +1176,9 @@ with st.expander(
         "Squeeze-and-Excitation (SE)"
     )
 
+
     st.write(
-        "Output:"
+        "Pneumonia classes:"
     )
 
     st.write(
@@ -1187,6 +1242,7 @@ if uploaded_file is not None:
         "Uploaded Image"
     )
 
+
     st.image(
         image,
         caption="Uploaded Image",
@@ -1230,8 +1286,7 @@ if uploaded_file is not None:
     ):
 
         # ====================================================
-        # STEP 1
-        # X-RAY VERIFICATION
+        # STEP 1 — X-RAY VERIFICATION
         # ====================================================
 
         st.subheader(
@@ -1296,6 +1351,18 @@ if uploaded_file is not None:
             ]
         )
 
+        predicted_class = (
+            xray_decision[
+                "predicted_class"
+            ]
+        )
+
+        raw_scores = (
+            xray_decision[
+                "raw_scores"
+            ]
+        )
+
 
         # ====================================================
         # X-RAY VERIFICATION DECISION
@@ -1307,7 +1374,7 @@ if uploaded_file is not None:
 
 
         # ----------------------------------------------------
-        # PROBABILITY METRICS
+        # PROBABILITIES
         # ----------------------------------------------------
 
         col1, col2 = st.columns(2)
@@ -1337,6 +1404,7 @@ if uploaded_file is not None:
             "Chest X-ray probability"
         )
 
+
         st.progress(
             float(
                 np.clip(
@@ -1352,6 +1420,7 @@ if uploaded_file is not None:
             "Non-X-ray probability"
         )
 
+
         st.progress(
             float(
                 np.clip(
@@ -1364,11 +1433,11 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # DECISION CONDITIONS
+        # DECISION CHECKS
         # ====================================================
 
         st.write(
-            "**Decision checks**"
+            "**Verification checks**"
         )
 
 
@@ -1380,13 +1449,13 @@ if uploaded_file is not None:
             if threshold_pass:
 
                 st.success(
-                    "X-ray confidence threshold: PASS"
+                    "X-ray threshold: PASS"
                 )
 
             else:
 
                 st.error(
-                    "X-ray confidence threshold: FAIL"
+                    "X-ray threshold: FAIL"
                 )
 
 
@@ -1403,6 +1472,56 @@ if uploaded_file is not None:
                 st.error(
                     "X-ray dominance: FAIL"
                 )
+
+
+        # ====================================================
+        # RAW VERIFIER OUTPUT
+        # ====================================================
+
+        with st.expander(
+            "X-ray Verifier Diagnostic Output"
+        ):
+
+            st.write(
+                "Configured class mapping:"
+            )
+
+            st.code(
+                f"""
+Class {NON_XRAY_CLASS_INDEX} = NON-XRAY
+Class {XRAY_CLASS_INDEX} = X-RAY
+"""
+            )
+
+
+            st.write(
+                "Raw model output:"
+            )
+
+            st.write(
+                raw_scores
+            )
+
+
+            st.write(
+                "Converted probabilities:"
+            )
+
+            st.write(
+                xray_decision[
+                    "probabilities"
+                ]
+            )
+
+
+            st.write(
+                "Model's argmax class:"
+            )
+
+            st.write(
+                f"Class {xray_decision['predicted_index']} "
+                f"→ {predicted_class}"
+            )
 
 
         # ====================================================
@@ -1457,7 +1576,7 @@ if uploaded_file is not None:
 
 
             # ------------------------------------------------
-            # EXPLAIN DECISION
+            # EXPLAIN REJECTION
             # ------------------------------------------------
 
             if not threshold_pass:
@@ -1512,8 +1631,7 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # STEP 2
-        # PNEUMONIA DETECTION
+        # STEP 2 — PNEUMONIA DETECTION
         # ====================================================
 
         st.subheader(
@@ -1528,7 +1646,7 @@ if uploaded_file is not None:
             try:
 
                 (
-                    predicted_class,
+                    pneumonia_class,
                     prediction_confidence,
                     normal_probability,
                     pneumonia_probability
@@ -1552,7 +1670,7 @@ if uploaded_file is not None:
         # DIAGNOSIS
         # ====================================================
 
-        if predicted_class == "Pneumonia":
+        if pneumonia_class == "Pneumonia":
 
             st.error(
                 "Diagnosis: Pneumonia"
@@ -1575,7 +1693,7 @@ if uploaded_file is not None:
 
 
         st.write(
-            f"**Diagnosis:** {predicted_class}"
+            f"**Diagnosis:** {pneumonia_class}"
         )
 
 
@@ -1599,6 +1717,7 @@ if uploaded_file is not None:
                 f"{normal_probability * 100:.2f}%"
             )
 
+
             st.progress(
                 float(
                     np.clip(
@@ -1617,6 +1736,7 @@ if uploaded_file is not None:
                 f"{pneumonia_probability * 100:.2f}%"
             )
 
+
             st.progress(
                 float(
                     np.clip(
@@ -1633,7 +1753,7 @@ if uploaded_file is not None:
         # ====================================================
 
         history_entry = (
-            f"{predicted_class} - "
+            f"{pneumonia_class} - "
             f"{uploaded_file.name}"
         )
 
@@ -1660,74 +1780,84 @@ if uploaded_file is not None:
                 "Verified modality: Chest X-ray"
             )
 
+
             st.write(
                 f"X-ray probability: "
                 f"{xray_probability * 100:.2f}%"
             )
+
 
             st.write(
                 f"Non-X-ray probability: "
                 f"{non_xray_probability * 100:.2f}%"
             )
 
-            st.write(
-                "X-ray verification threshold:"
-            )
 
             st.write(
+                f"X-ray threshold: "
                 f"{XRAY_ACCEPT_THRESHOLD * 100:.0f}%"
             )
 
-            st.write(
-                "X-ray dominance requirement:"
-            )
 
             st.write(
-                str(REQUIRE_XRAY_DOMINANCE)
+                f"X-ray dominance required: "
+                f"{REQUIRE_XRAY_DOMINANCE}"
             )
+
 
             st.divider()
+
 
             st.write(
                 "Proposed pneumonia architecture:"
             )
 
+
             st.write(
                 "Xception Block (64 filters)"
             )
+
 
             st.write(
                 "Xception Block (128 filters)"
             )
 
+
             st.write(
                 "Residual Block (256 filters)"
             )
 
+
             st.write(
                 "SE Attention"
             )
+
 
             st.write(
                 "Global Average Pooling + "
                 "Global Max Pooling"
             )
 
+
             st.write(
                 "Batch Normalization"
             )
+
 
             st.write(
                 "Dense 128 + GELU"
             )
 
+
             st.write(
                 "Dropout = 0.3"
             )
 
+
             st.write(
                 "Softmax = 2 classes"
             )
+
 
             st.write(
                 "Classes = Normal / Pneumonia"
