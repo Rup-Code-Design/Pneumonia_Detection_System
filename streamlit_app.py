@@ -75,11 +75,40 @@ MODALITY_MODEL_PATH = os.path.join(
     "best_modality_classifier.weights.h5"
 )
 
+MODALITY_IMAGE_SIZE = (224, 224)
 
-PNEUMONIA_MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "best_xception_pneumonia_model.keras"
-)
+MODALITY_CONFIDENCE_THRESHOLD = 0.90
+
+MODALITY_CLASS_MAP = {
+    0: "CHEST_XRAY",
+    1: "CT",
+    2: "MRI"
+}
+
+MODALITY_XRAY_CLASS_INDEX = 0
+@st.cache_resource
+def load_modality_model():
+
+    validate_model_file(
+        MODALITY_MODEL_PATH,
+        "Medical image modality classifier weights"
+    )
+
+    model = build_modality_classifier(
+        input_shape=(224, 224, 3),
+        num_classes=3
+    )
+
+    if model is None:
+        raise RuntimeError(
+            "build_modality_classifier() returned None."
+        )
+
+    model.load_weights(
+        MODALITY_MODEL_PATH
+    )
+
+    return model
 
 
 # ============================================================
