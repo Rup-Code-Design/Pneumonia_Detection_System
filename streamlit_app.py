@@ -1,33 +1,10 @@
-# ============================================================
-# STREAMLIT APP
-# PNEUMONIA DETECTION SYSTEM
-#
-# PIPELINE:
-#
-# 1. Upload image
-# 2. Reject color images
-# 3. Verify Chest X-ray using best_xray_verifier.keras
-# 4. If X-ray -> Pneumonia detection
-# 5. Display Normal / Pneumonia
-#
-# NO MODALITY CLASSIFIER IS REQUIRED.
-#
-# ============================================================
-
-
-# ============================================================
-# IMPORTS
-# ============================================================
-
 import os
-import io
-import numpy as np
-import cv2
-import tensorflow as tf
-import streamlit as st
+from pathlib import Path
 
+import numpy as np
+import streamlit as st
+import tensorflow as tf
 from PIL import Image
-from fpdf import FPDF
 
 
 # ============================================================
@@ -35,8 +12,8 @@ from fpdf import FPDF
 # ============================================================
 
 st.set_page_config(
-    page_title="Pneumonia Detection System",
-    page_icon="🫁",
+    page_title="Chest X-ray Pneumonia Detection",
+    page_icon="🩻",
     layout="wide"
 )
 
@@ -44,325 +21,108 @@ st.set_page_config(
 # ============================================================
 # BASE DIRECTORY
 # ============================================================
-#
-# This is important for Streamlit Cloud.
-#
-# Instead of:
-#
-#     "best_xray_verifier.keras"
-#
-# use:
-#
-#     os.path.join(BASE_DIR, "best_xray_verifier.keras")
-#
-# Therefore the app always looks in the same directory
-# where streamlit_app.py is located.
-#
-# ============================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+BASE_DIR = Path(__file__).resolve().parent
 
 
 # ============================================================
-# MODEL FILES
+# MODEL PATHS
 # ============================================================
 
-# Preferred X-ray verifier:
-# Complete Keras model.
-XRAY_MODEL_KERAS = os.path.join(
-    BASE_DIR,
-    "best_xray_verifier.keras"
-)
+XRAY_MODEL_PATH = BASE_DIR / "best_xray_verifier.weights.h5"
 
-
-# Fallback X-ray verifier weights.
-XRAY_MODEL_WEIGHTS = os.path.join(
-    BASE_DIR,
-    "best_xray_verifier.weights.h5"
-)
-
-
-# Complete pneumonia model.
-PNEUMONIA_MODEL_KERAS = os.path.join(
-    BASE_DIR,
-    "best_exception_pneumonia_model.keras"
-)
-
-
-# ============================================================
-# MODEL INPUT SIZES
-# ============================================================
-
-XRAY_IMAGE_SIZE = (
-    128,
-    128
-)
-
-
-PNEUMONIA_IMAGE_SIZE = (
-    224,
-    224
-)
-
-
-# ============================================================
-# COLOR IMAGE SETTINGS
-# ============================================================
-
-COLOR_TOLERANCE = 5.0
-
-
-# ============================================================
-# X-RAY VERIFIER SETTINGS
-# ============================================================
-
-XRAY_CONFIDENCE_THRESHOLD = 0.50
-
-
-# ============================================================
-# CLASS MAPPINGS
-# ============================================================
-
-# X-ray verifier:
-#
-# 0 = X-RAY
-# 1 = NON-XRAY
-#
 # IMPORTANT:
-# This must match your X-ray verifier training code.
+# This is the exact filename present in your GitHub repository.
+PNEUMONIA_MODEL_PATH = BASE_DIR / "best_xception_pneumonia_model.keras"
+
+
+# ============================================================
+# IMAGE SIZES
+# ============================================================
+
+XRAY_IMAGE_SIZE = (128, 128)
+PNEUMONIA_IMAGE_SIZE = (224, 224)
+
+
+# ============================================================
+# X-RAY CLASS MAPPING
+# ============================================================
+
+# Based on the verifier configuration used previously:
 #
-XRAY_CLASS_MAP = {
-    0: "X-RAY",
-    1: "NON-XRAY"
-}
-
-
-# Pneumonia model:
+# Class 0 = NON-XRAY
+# Class 1 = XRAY
 #
-# 0 = Normal
-# 1 = Pneumonia
-#
-# IMPORTANT:
-# This must match your pneumonia training code.
-#
-PNEUMONIA_CLASS_MAP = {
-    0: "Normal",
-    1: "Pneumonia"
-}
+# If your training code used the opposite mapping, these two
+# values must be reversed.
+
+NON_XRAY_CLASS_INDEX = 0
+XRAY_CLASS_INDEX = 1
+
+XRAY_ACCEPT_THRESHOLD = 0.50
 
 
 # ============================================================
-# SESSION STATE
+# IMPORT X-RAY MODEL BUILDER
 # ============================================================
 
-if "history" not in st.session_state:
-
-    st.session_state.history = []
+try:
+    from xray_model_builder import build_xray_classifier
+except Exception as e:
+    build_xray_classifier = None
+    XRAY_IMPORT_ERROR = str(e)
+else:
+    XRAY_IMPORT_ERROR = None
 
 
 # ============================================================
-# HELPER FUNCTION:
-# FILE STATUS
+# HELPER: CHECK FILE
 # ============================================================
 
-def get_file_status():
+def check_model_files():
 
-    return {
-        "xray_keras": os.path.isfile(
-            XRAY_MODEL_KERAS
-        ),
+    missing_files = []
 
-        "xray_weights": os.path.isfile(
-            XRAY_MODEL_WEIGHTS
-        ),
-
-        "pneumonia_keras": os.path.isfile(
-            PNEUMONIA_MODEL_KERAS
+    if not XRAY_MODEL_PATH.exists():
+        missing_files.append(
+            f"X-ray verifier: {XRAY_MODEL_PATH.name}"
         )
-    }
 
-
-# ============================================================
-# HELPER FUNCTION:
-# COLOR IMAGE DETECTION
-# ============================================================
-
-def calculate_color_difference(
-    image_array
-):
-
-    """
-    Calculate the average difference between
-    RGB channels.
-
-    A grayscale image has approximately:
-
-        R ≈ G ≈ B
-
-    A true color image has larger differences.
-    """
-
-    rgb_image = image_array.astype(
-        np.float32
-    )
-
-    red = rgb_image[:, :, 0]
-
-    green = rgb_image[:, :, 1]
-
-    blue = rgb_image[:, :, 2]
-
-
-    rg_difference = np.mean(
-        np.abs(
-            red - green
+    if not PNEUMONIA_MODEL_PATH.exists():
+        missing_files.append(
+            f"Pneumonia model: {PNEUMONIA_MODEL_PATH.name}"
         )
-    )
 
-    gb_difference = np.mean(
-        np.abs(
-            green - blue
-        )
-    )
-
-    rb_difference = np.mean(
-        np.abs(
-            red - blue
-        )
-    )
-
-
-    average_difference = (
-        rg_difference
-        + gb_difference
-        + rb_difference
-    ) / 3.0
-
-
-    return float(
-        average_difference
-    )
+    return missing_files
 
 
 # ============================================================
-# HELPER FUNCTION:
-# CHECK COLOR IMAGE
-# ============================================================
-
-def is_color_image(
-    image_array,
-    tolerance=COLOR_TOLERANCE
-):
-
-    difference = calculate_color_difference(
-        image_array
-    )
-
-    return (
-        difference > tolerance
-    ), difference
-
-
-# ============================================================
-# LOAD X-RAY MODEL
+# LOAD X-RAY VERIFIER
 # ============================================================
 
 @st.cache_resource
 def load_xray_model():
 
-    # --------------------------------------------------------
-    # OPTION 1:
-    # Load complete .keras model
-    # --------------------------------------------------------
+    if build_xray_classifier is None:
+        raise ImportError(
+            "Could not import build_xray_classifier from "
+            "xray_model_builder.py.\n\n"
+            f"Original error:\n{XRAY_IMPORT_ERROR}"
+        )
 
-    if os.path.isfile(
-        XRAY_MODEL_KERAS
-    ):
+    if not XRAY_MODEL_PATH.exists():
+        raise FileNotFoundError(
+            "X-ray verifier model was not found.\n\n"
+            f"Expected location:\n{XRAY_MODEL_PATH}"
+        )
 
-        try:
+    # Build the same architecture used during training.
+    model = build_xray_classifier()
 
-            model = tf.keras.models.load_model(
-                XRAY_MODEL_KERAS,
-                compile=False
-            )
+    # Load trained weights.
+    model.load_weights(str(XRAY_MODEL_PATH))
 
-            return model, "keras"
-
-        except Exception as e:
-
-            raise RuntimeError(
-                "The file "
-                f"{XRAY_MODEL_KERAS} "
-                "exists but could not be loaded.\n\n"
-                "This usually means the .keras model is "
-                "corrupted or incompatible with the installed "
-                "TensorFlow/Keras version.\n\n"
-                f"Original error: {e}"
-            )
-
-
-    # --------------------------------------------------------
-    # OPTION 2:
-    # Fallback to weights
-    # --------------------------------------------------------
-
-    if os.path.isfile(
-        XRAY_MODEL_WEIGHTS
-    ):
-
-        try:
-
-            # Import only when needed.
-            from xray_model_builder import (
-                build_xray_classifier
-            )
-
-
-            model = build_xray_classifier(
-                input_shape=(
-                    128,
-                    128,
-                    3
-                )
-            )
-
-
-            model.load_weights(
-                XRAY_MODEL_WEIGHTS
-            )
-
-
-            return model, "weights"
-
-
-        except Exception as e:
-
-            raise RuntimeError(
-                "X-ray verifier weights were found, "
-                "but they could not be loaded.\n\n"
-                "The architecture generated by "
-                "xray_model_builder.py must exactly match "
-                "the architecture used during training.\n\n"
-                f"Weights file: "
-                f"{XRAY_MODEL_WEIGHTS}\n\n"
-                f"Original error: {e}"
-            )
-
-
-    # --------------------------------------------------------
-    # Nothing found
-    # --------------------------------------------------------
-
-    raise FileNotFoundError(
-        "X-ray verifier model was not found.\n\n"
-        "Expected one of:\n"
-        f"1. {XRAY_MODEL_KERAS}\n"
-        f"2. {XRAY_MODEL_WEIGHTS}\n\n"
-        "Your GitHub repository should contain at least "
-        "one of these files."
-    )
+    return model
 
 
 # ============================================================
@@ -372,303 +132,213 @@ def load_xray_model():
 @st.cache_resource
 def load_pneumonia_model():
 
-    if not os.path.isfile(
-        PNEUMONIA_MODEL_KERAS
-    ):
+    # IMPORTANT:
+    # The repository contains:
+    #
+    # best_xception_pneumonia_model.keras
+    #
+    # NOT:
+    #
+    # best_exception_pneumonia_model.keras
 
+    if not PNEUMONIA_MODEL_PATH.exists():
         raise FileNotFoundError(
             "Pneumonia model was not found.\n\n"
-            f"Expected location:\n"
-            f"{PNEUMONIA_MODEL_KERAS}\n\n"
+            f"Expected location:\n{PNEUMONIA_MODEL_PATH}\n\n"
             "Make sure "
-            "'best_exception_pneumonia_model.keras' "
+            "'best_xception_pneumonia_model.keras' "
             "is committed to the same GitHub repository "
             "as streamlit_app.py."
         )
 
-
-    try:
-
-        model = tf.keras.models.load_model(
-            PNEUMONIA_MODEL_KERAS,
-            compile=False
-        )
-
-        return model
-
-
-    except Exception as e:
-
-        raise RuntimeError(
-            "The pneumonia model file exists, "
-            "but it could not be loaded.\n\n"
-            f"File:\n"
-            f"{PNEUMONIA_MODEL_KERAS}\n\n"
-            f"Original error: {e}"
-        )
-
-
-# ============================================================
-# MODEL OUTPUT PROCESSING
-# ============================================================
-
-def convert_to_probabilities(
-    prediction
-):
-
-    prediction = np.asarray(
-        prediction
+    # Load the complete saved model directly.
+    #
+    # compile=False prevents unnecessary optimizer/loss
+    # reconstruction during deployment.
+    model = tf.keras.models.load_model(
+        str(PNEUMONIA_MODEL_PATH),
+        compile=False
     )
 
+    return model
+
+
+# ============================================================
+# IMAGE PREPROCESSING FOR X-RAY VERIFIER
+# ============================================================
+
+def preprocess_for_xray(image):
+
+    # Convert to RGB because most CNN models expect 3 channels.
+    image = image.convert("RGB")
+
+    image = image.resize(XRAY_IMAGE_SIZE)
+
+    image_array = np.asarray(
+        image,
+        dtype=np.float32
+    )
+
+    image_array = image_array / 255.0
+
+    image_array = np.expand_dims(
+        image_array,
+        axis=0
+    )
+
+    return image_array
+
+
+# ============================================================
+# IMAGE PREPROCESSING FOR PNEUMONIA MODEL
+# ============================================================
+
+def preprocess_for_pneumonia(image):
+
+    image = image.convert("RGB")
+
+    image = image.resize(PNEUMONIA_IMAGE_SIZE)
+
+    image_array = np.asarray(
+        image,
+        dtype=np.float32
+    )
+
+    image_array = image_array / 255.0
+
+    image_array = np.expand_dims(
+        image_array,
+        axis=0
+    )
+
+    return image_array
+
+
+# ============================================================
+# X-RAY VERIFICATION
+# ============================================================
+
+def verify_xray(image):
+
+    model = load_xray_model()
+
+    processed_image = preprocess_for_xray(image)
+
+    prediction = model.predict(
+        processed_image,
+        verbose=0
+    )
+
+    prediction = np.asarray(prediction)
 
     # --------------------------------------------------------
-    # Flatten batch output
+    # Handle common binary model output formats
     # --------------------------------------------------------
 
-    if prediction.ndim == 2:
+    if prediction.ndim == 2 and prediction.shape[1] == 2:
 
-        scores = prediction[0]
+        probabilities = prediction[0]
 
-    elif prediction.ndim == 1:
+        non_xray_probability = float(
+            probabilities[NON_XRAY_CLASS_INDEX]
+        )
 
-        scores = prediction
+        xray_probability = float(
+            probabilities[XRAY_CLASS_INDEX]
+        )
+
+    elif prediction.ndim == 2 and prediction.shape[1] == 1:
+
+        # For sigmoid output:
+        #
+        # 0 = NON-XRAY
+        # 1 = XRAY
+
+        xray_probability = float(prediction[0][0])
+
+        non_xray_probability = (
+            1.0 - xray_probability
+        )
+
+    elif prediction.ndim == 1 and prediction.size == 2:
+
+        probabilities = prediction
+
+        non_xray_probability = float(
+            probabilities[NON_XRAY_CLASS_INDEX]
+        )
+
+        xray_probability = float(
+            probabilities[XRAY_CLASS_INDEX]
+        )
+
+    elif prediction.ndim == 1 and prediction.size == 1:
+
+        xray_probability = float(
+            prediction[0]
+        )
+
+        non_xray_probability = (
+            1.0 - xray_probability
+        )
 
     else:
 
         raise ValueError(
-            "Unexpected model output shape: "
+            "Unexpected X-ray verifier output shape: "
             f"{prediction.shape}"
         )
 
+    # --------------------------------------------------------
+    # Decision
+    # --------------------------------------------------------
 
-    scores = scores.astype(
-        np.float64
+    is_xray = (
+        xray_probability >= XRAY_ACCEPT_THRESHOLD
+        and xray_probability > non_xray_probability
     )
 
-
-    # --------------------------------------------------------
-    # Case 1:
-    # Already probabilities
-    # --------------------------------------------------------
-
-    if (
-        np.all(scores >= 0.0)
-        and
-        np.all(scores <= 1.0)
-        and
-        np.isclose(
-            np.sum(scores),
-            1.0,
-            atol=1e-3
-        )
-    ):
-
-        return scores
-
-
-    # --------------------------------------------------------
-    # Case 2:
-    # Logits
-    # --------------------------------------------------------
-
-    return tf.nn.softmax(
-        scores
-    ).numpy()
-
-
-# ============================================================
-# X-RAY PREDICTION
-# ============================================================
-
-def predict_xray(
-    model,
-    image_array
-):
-
-    # --------------------------------------------------------
-    # Resize
-    # --------------------------------------------------------
-
-    resized = cv2.resize(
-        image_array,
-        XRAY_IMAGE_SIZE,
-        interpolation=cv2.INTER_AREA
-    )
-
-
-    # --------------------------------------------------------
-    # Normalize
-    # --------------------------------------------------------
-
-    resized = (
-        resized.astype(
-            np.float32
-        ) / 255.0
-    )
-
-
-    # --------------------------------------------------------
-    # Batch
-    # --------------------------------------------------------
-
-    model_input = np.expand_dims(
-        resized,
-        axis=0
-    )
-
-
-    # --------------------------------------------------------
-    # Prediction
-    # --------------------------------------------------------
-
-    prediction = model.predict(
-        model_input,
-        verbose=0
-    )
-
-
-    prediction = np.asarray(
-        prediction
-    )
-
-
-    # --------------------------------------------------------
-    # Binary classifier expected
-    # --------------------------------------------------------
-
-    if (
-        prediction.ndim != 2
-        or
-        prediction.shape[1] != 2
-    ):
-
-        raise ValueError(
-            "The X-ray verifier must output "
-            "2 classes.\n\n"
-            f"Received output shape: "
-            f"{prediction.shape}"
-        )
-
-
-    probabilities = convert_to_probabilities(
-        prediction
-    )
-
-
-    predicted_index = int(
-        np.argmax(
-            probabilities
-        )
-    )
-
-
-    confidence = float(
-        probabilities[
-            predicted_index
-        ]
-    )
-
-
-    result = XRAY_CLASS_MAP.get(
-        predicted_index,
-        "UNKNOWN"
-    )
-
-
-    return (
-        result,
-        confidence,
-        probabilities
-    )
+    return {
+        "is_xray": is_xray,
+        "xray_probability": xray_probability,
+        "non_xray_probability": non_xray_probability
+    }
 
 
 # ============================================================
 # PNEUMONIA PREDICTION
 # ============================================================
 
-def predict_pneumonia(
-    model,
-    image_array
-):
+def predict_pneumonia(image):
 
-    # --------------------------------------------------------
-    # Resize
-    # --------------------------------------------------------
+    model = load_pneumonia_model()
 
-    resized = cv2.resize(
-        image_array,
-        PNEUMONIA_IMAGE_SIZE,
-        interpolation=cv2.INTER_AREA
-    )
-
-
-    # --------------------------------------------------------
-    # Normalize
-    # --------------------------------------------------------
-
-    resized = (
-        resized.astype(
-            np.float32
-        ) / 255.0
-    )
-
-
-    # --------------------------------------------------------
-    # Batch
-    # --------------------------------------------------------
-
-    model_input = np.expand_dims(
-        resized,
-        axis=0
-    )
-
-
-    # --------------------------------------------------------
-    # Prediction
-    # --------------------------------------------------------
+    processed_image = preprocess_for_pneumonia(image)
 
     prediction = model.predict(
-        model_input,
+        processed_image,
         verbose=0
     )
 
-
-    prediction = np.asarray(
-        prediction
-    )
-
+    prediction = np.asarray(prediction)
 
     # --------------------------------------------------------
-    # Determine output format
+    # Normalize prediction shape
     # --------------------------------------------------------
 
-    if prediction.ndim == 2:
+    # Case 1:
+    # Softmax output:
+    # [Normal probability, Pneumonia probability]
+    #
+    # Case 2:
+    # Sigmoid output:
+    # [Pneumonia probability]
+    #
+    # The function supports both.
 
-        output_units = prediction.shape[1]
+    if prediction.ndim == 2 and prediction.shape[1] == 2:
 
-    elif prediction.ndim == 1:
-
-        output_units = prediction.shape[0]
-
-    else:
-
-        raise ValueError(
-            "Unexpected pneumonia model "
-            f"output shape: {prediction.shape}"
-        )
-
-
-    # --------------------------------------------------------
-    # Two-class model
-    # --------------------------------------------------------
-
-    if output_units == 2:
-
-        probabilities = (
-            convert_to_probabilities(
-                prediction
-            )
-        )
+        probabilities = prediction[0]
 
         normal_probability = float(
             probabilities[0]
@@ -678,589 +348,95 @@ def predict_pneumonia(
             probabilities[1]
         )
 
+    elif prediction.ndim == 2 and prediction.shape[1] == 1:
 
-        if (
-            pneumonia_probability
-            >= normal_probability
-        ):
-
-            diagnosis = "Pneumonia"
-
-            confidence = (
-                pneumonia_probability
-            )
-
-        else:
-
-            diagnosis = "Normal"
-
-            confidence = (
-                normal_probability
-            )
-
-
-        return (
-            diagnosis,
-            confidence,
-            normal_probability,
-            pneumonia_probability
+        pneumonia_probability = float(
+            prediction[0][0]
         )
-
-
-    # --------------------------------------------------------
-    # One-output sigmoid model
-    # --------------------------------------------------------
-
-    if output_units == 1:
-
-        raw_value = float(
-            prediction.reshape(-1)[0]
-        )
-
-
-        # If the output is already between 0 and 1,
-        # treat it as probability.
-        if (
-            0.0
-            <= raw_value
-            <= 1.0
-        ):
-
-            pneumonia_probability = (
-                raw_value
-            )
-
-        else:
-
-            pneumonia_probability = float(
-                tf.sigmoid(
-                    raw_value
-                ).numpy()
-            )
-
 
         normal_probability = (
-            1.0
-            - pneumonia_probability
+            1.0 - pneumonia_probability
         )
 
+    elif prediction.ndim == 1 and prediction.size == 2:
 
-        if (
-            pneumonia_probability
-            >= 0.5
-        ):
-
-            diagnosis = "Pneumonia"
-
-            confidence = (
-                pneumonia_probability
-            )
-
-        else:
-
-            diagnosis = "Normal"
-
-            confidence = (
-                normal_probability
-            )
-
-
-        return (
-            diagnosis,
-            confidence,
-            normal_probability,
-            pneumonia_probability
+        normal_probability = float(
+            prediction[0]
         )
 
-
-    raise ValueError(
-        "Unsupported pneumonia model output. "
-        "Expected either 1 output neuron or "
-        "2 output neurons.\n\n"
-        f"Received shape: {prediction.shape}"
-    )
-
-
-# ============================================================
-# HISTORY FUNCTION
-# ============================================================
-
-def add_history(
-    text
-):
-
-    if text not in st.session_state.history:
-
-        st.session_state.history.append(
-            text
+        pneumonia_probability = float(
+            prediction[1]
         )
 
+    elif prediction.ndim == 1 and prediction.size == 1:
 
-# ============================================================
-# CREATE PDF
-# ============================================================
-
-def create_pdf(
-    filename,
-    diagnosis,
-    diagnosis_confidence,
-    xray_confidence,
-    normal_probability,
-    pneumonia_probability
-):
-
-    clean_filename = (
-        filename
-        .encode(
-            "ascii",
-            "ignore"
-        )
-        .decode(
-            "ascii"
-        )
-    )
-
-
-    pdf = FPDF()
-
-    pdf.add_page()
-
-
-    # --------------------------------------------------------
-    # TITLE
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        18
-    )
-
-    pdf.cell(
-        0,
-        15,
-        "Pneumonia AI Diagnostic Report",
-        ln=True,
-        align="C"
-    )
-
-
-    pdf.line(
-        10,
-        25,
-        200,
-        25
-    )
-
-
-    pdf.ln(10)
-
-
-    # --------------------------------------------------------
-    # FILE NAME
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "File Name:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        clean_filename,
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # MODALITY
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "Image Modality:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        "Chest X-ray",
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # X-RAY CONFIDENCE
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "X-ray Confidence:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        f"{xray_confidence * 100:.2f}%",
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # NORMAL PROBABILITY
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "Normal Probability:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        f"{normal_probability * 100:.2f}%",
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # PNEUMONIA PROBABILITY
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "Pneumonia Probability:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        f"{pneumonia_probability * 100:.2f}%",
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # DIAGNOSIS
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "Diagnosis:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        diagnosis,
-        ln=True
-    )
-
-
-    # --------------------------------------------------------
-    # DIAGNOSIS CONFIDENCE
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "B",
-        12
-    )
-
-    pdf.cell(
-        55,
-        10,
-        "Diagnosis Confidence:",
-        ln=False
-    )
-
-
-    pdf.set_font(
-        "Arial",
-        "",
-        12
-    )
-
-    pdf.cell(
-        0,
-        10,
-        f"{diagnosis_confidence * 100:.2f}%",
-        ln=True
-    )
-
-
-    pdf.ln(15)
-
-
-    # --------------------------------------------------------
-    # DISCLAIMER
-    # --------------------------------------------------------
-
-    pdf.set_font(
-        "Arial",
-        "I",
-        10
-    )
-
-    pdf.multi_cell(
-        0,
-        7,
-        "Disclaimer: This AI-generated result "
-        "is intended for research purposes only "
-        "and does not replace professional "
-        "medical diagnosis."
-    )
-
-
-    # --------------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------------
-
-    try:
-
-        output = pdf.output(
-            dest="S"
+        pneumonia_probability = float(
+            prediction[0]
         )
 
-        if isinstance(
-            output,
-            str
-        ):
-
-            return output.encode(
-                "latin-1"
-            )
-
-        return bytes(
-            output
-        )
-
-    except TypeError:
-
-        output = pdf.output()
-
-        if isinstance(
-            output,
-            bytes
-        ):
-
-            return output
-
-        if isinstance(
-            output,
-            bytearray
-        ):
-
-            return bytes(
-                output
-            )
-
-        return str(
-            output
-        ).encode(
-            "latin-1"
-        )
-
-
-# ============================================================
-# CHECK MODEL FILES
-# ============================================================
-
-file_status = get_file_status()
-
-
-# ============================================================
-# LOAD MODELS
-# ============================================================
-
-try:
-
-    xray_model, xray_model_type = (
-        load_xray_model()
-    )
-
-    pneumonia_model = (
-        load_pneumonia_model()
-    )
-
-
-except Exception as e:
-
-    st.error(
-        "Model loading failed."
-    )
-
-    st.exception(e)
-
-
-    st.markdown(
-        "### Model files detected"
-    )
-
-
-    if file_status["xray_keras"]:
-
-        st.success(
-            "✓ best_xray_verifier.keras"
+        normal_probability = (
+            1.0 - pneumonia_probability
         )
 
     else:
 
-        st.error(
-            "✗ best_xray_verifier.keras"
+        raise ValueError(
+            "Unexpected pneumonia model output shape: "
+            f"{prediction.shape}"
         )
 
+    # --------------------------------------------------------
+    # Final decision
+    # --------------------------------------------------------
 
-    if file_status["xray_weights"]:
+    if pneumonia_probability >= normal_probability:
 
-        st.success(
-            "✓ best_xray_verifier.weights.h5"
-        )
+        predicted_class = "Pneumonia"
 
     else:
 
-        st.warning(
-            "✗ best_xray_verifier.weights.h5"
-        )
+        predicted_class = "Normal"
 
-
-    if file_status["pneumonia_keras"]:
-
-        st.success(
-            "✓ best_exception_pneumonia_model.keras"
-        )
-
-    else:
-
-        st.error(
-            "✗ best_exception_pneumonia_model.keras"
-        )
-
-
-    st.stop()
+    return {
+        "class": predicted_class,
+        "pneumonia_probability": pneumonia_probability,
+        "normal_probability": normal_probability
+    }
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
-st.title(
-    "Pneumonia Detection System"
-)
-
+st.title("Chest X-ray Pneumonia Detection System")
 
 st.markdown(
     """
-### AI Chest X-ray Analysis
+This system performs pneumonia detection using a two-stage
+deep-learning pipeline.
 
-The system performs the following sequence:
+**Stage 1:** Verify that the uploaded image is a chest X-ray.
 
-**1. Color Image Rejection**  
-Color images are rejected before model inference.
-
-**2. Chest X-ray Verification**  
-The X-ray verifier determines whether the uploaded image
-is a Chest X-ray.
-
-**3. Pneumonia Detection**  
-Only a verified Chest X-ray is passed to the pneumonia
-classification model.
-
-**4. Final Result**  
-The system reports **Normal** or **Pneumonia**.
+**Stage 2:** If the image is a valid chest X-ray, classify it
+as **Normal** or **Pneumonia**.
 """
 )
+
+
+# ============================================================
+# MODEL FILE CHECK
+# ============================================================
+
+missing_files = check_model_files()
+
+if missing_files:
+
+    st.error("Required model file(s) are missing:")
+
+    for file_name in missing_files:
+        st.write(f"- `{file_name}`")
+
+    st.stop()
 
 
 # ============================================================
@@ -1269,505 +445,258 @@ The system reports **Normal** or **Pneumonia**.
 
 with st.sidebar:
 
-    st.header(
-        "System Information"
-    )
-
+    st.header("Model Information")
 
     st.write(
-        "X-ray verifier:"
+        "**X-ray verifier:**"
     )
 
-    if xray_model_type == "keras":
-
-        st.success(
-            "best_xray_verifier.keras"
-        )
-
-    else:
-
-        st.success(
-            "best_xray_verifier.weights.h5"
-        )
-
+    st.code(
+        "best_xray_verifier.weights.h5"
+    )
 
     st.write(
-        "Pneumonia model:"
+        "**Pneumonia model:**"
     )
 
-    st.success(
-        "best_exception_pneumonia_model.keras"
+    st.code(
+        "best_xception_pneumonia_model.keras"
     )
 
-
-    st.divider()
-
-
-    st.header(
-        "Recent Scans"
+    st.write(
+        "**X-ray input size:** "
+        "128 × 128"
     )
 
-
-    if not st.session_state.history:
-
-        st.write(
-            "No scans yet."
-        )
-
-    else:
-
-        for item in reversed(
-            st.session_state.history[-10:]
-        ):
-
-            st.text(
-                item
-            )
+    st.write(
+        "**Pneumonia input size:** "
+        "224 × 224"
+    )
 
 
 # ============================================================
-# FILE UPLOADER
+# IMAGE UPLOAD
 # ============================================================
 
 uploaded_file = st.file_uploader(
-    "Upload a Chest X-ray image",
+    "Upload an image",
     type=[
         "jpg",
         "jpeg",
-        "png"
-    ],
-    help=(
-        "Upload a grayscale chest X-ray image. "
-        "Color images are automatically rejected."
-    )
+        "png",
+        "bmp",
+        "webp"
+    ]
 )
 
 
 # ============================================================
-# PROCESS IMAGE
+# MAIN PIPELINE
 # ============================================================
 
 if uploaded_file is not None:
 
     try:
 
-        # ----------------------------------------------------
-        # READ FILE
-        # ----------------------------------------------------
-
-        file_bytes = (
-            uploaded_file.getvalue()
-        )
-
-
         image = Image.open(
-            io.BytesIO(
-                file_bytes
-            )
+            uploaded_file
         )
 
+        # Force image loading before model inference.
+        image.load()
 
-        # ----------------------------------------------------
-        # Convert to RGB only for processing
-        # ----------------------------------------------------
-
-        image = image.convert(
-            "RGB"
-        )
-
-
-        image_array = np.array(
-            image
-        )
-
-
-        # ----------------------------------------------------
-        # Validate
-        # ----------------------------------------------------
-
-        if (
-            image_array is None
-            or
-            image_array.size == 0
-        ):
-
-            st.error(
-                "Could not read the uploaded image."
-            )
-
-            st.stop()
-
-
-        # ----------------------------------------------------
-        # DISPLAY IMAGE
-        # ----------------------------------------------------
+        st.subheader("Uploaded Image")
 
         st.image(
             image,
-            caption="Uploaded Image",
+            caption="Input Image",
             use_container_width=True
         )
-
-
-        # ----------------------------------------------------
-        # ANALYZE BUTTON
-        # ----------------------------------------------------
-
-        analyze = st.button(
-            "Analyze Image",
-            type="primary",
-            use_container_width=True
-        )
-
-
-        if analyze:
-
-            # =================================================
-            # STEP 1
-            # COLOR VALIDATION
-            # =================================================
-
-            st.subheader(
-                "Step 1 — Image Validation"
-            )
-
-
-            is_color, color_difference = (
-                is_color_image(
-                    image_array
-                )
-            )
-
-
-            st.write(
-                "RGB channel difference: "
-                f"{color_difference:.2f}"
-            )
-
-
-            # -------------------------------------------------
-            # REJECT COLOR IMAGE
-            # -------------------------------------------------
-
-            if is_color:
-
-                st.error(
-                    "This is not a Chest X-ray image."
-                )
-
-                st.warning(
-                    "Color images are not accepted. "
-                    "Please upload a grayscale chest X-ray."
-                )
-
-
-                add_history(
-                    "Rejected - Color image - "
-                    f"{uploaded_file.name}"
-                )
-
-
-                st.stop()
-
-
-            # -------------------------------------------------
-            # GRAYSCALE CONFIRMED
-            # -------------------------------------------------
-
-            st.success(
-                "Grayscale image detected."
-            )
-
-
-            # =================================================
-            # STEP 2
-            # X-RAY VERIFICATION
-            # =================================================
-
-            st.subheader(
-                "Step 2 — Chest X-ray Verification"
-            )
-
-
-            with st.spinner(
-                "Verifying whether the image is a Chest X-ray..."
-            ):
-
-                (
-                    xray_result,
-                    xray_confidence,
-                    xray_probabilities
-                ) = predict_xray(
-                    xray_model,
-                    image_array
-                )
-
-
-            # -------------------------------------------------
-            # X-RAY RESULT
-            # -------------------------------------------------
-
-            xray_probability = float(
-                xray_probabilities[0]
-            )
-
-
-            non_xray_probability = float(
-                xray_probabilities[1]
-            )
-
-
-            col1, col2 = st.columns(2)
-
-
-            with col1:
-
-                st.metric(
-                    "Chest X-ray Probability",
-                    f"{xray_probability * 100:.2f}%"
-                )
-
-
-            with col2:
-
-                st.metric(
-                    "Non-X-ray Probability",
-                    f"{non_xray_probability * 100:.2f}%"
-                )
-
-
-            # =================================================
-            # REJECT NON-XRAY
-            # =================================================
-
-            if (
-                xray_result != "X-RAY"
-                or
-                xray_confidence
-                < XRAY_CONFIDENCE_THRESHOLD
-            ):
-
-                st.error(
-                    "This is not a Chest X-ray image."
-                )
-
-                st.warning(
-                    "The X-ray verifier rejected this image."
-                )
-
-
-                add_history(
-                    "Rejected - Non-X-ray - "
-                    f"{uploaded_file.name}"
-                )
-
-
-                st.stop()
-
-
-            # =================================================
-            # X-RAY CONFIRMED
-            # =================================================
-
-            st.success(
-                "Chest X-ray verified."
-            )
-
-
-            st.write(
-                "X-ray verification confidence: "
-                f"{xray_confidence * 100:.2f}%"
-            )
-
-
-            # =================================================
-            # STEP 3
-            # PNEUMONIA DETECTION
-            # =================================================
-
-            st.subheader(
-                "Step 3 — Pneumonia Detection"
-            )
-
-
-            with st.spinner(
-                "Analyzing the Chest X-ray..."
-            ):
-
-                (
-                    diagnosis,
-                    diagnosis_confidence,
-                    normal_probability,
-                    pneumonia_probability
-                ) = predict_pneumonia(
-                    pneumonia_model,
-                    image_array
-                )
-
-
-            # =================================================
-            # FINAL DIAGNOSIS
-            # =================================================
-
-            if diagnosis == "Pneumonia":
-
-                st.error(
-                    "Diagnosis: Pneumonia"
-                )
-
-            else:
-
-                st.success(
-                    "Diagnosis: Normal"
-                )
-
-
-            # =================================================
-            # PROBABILITIES
-            # =================================================
-
-            col1, col2 = st.columns(2)
-
-
-            with col1:
-
-                st.metric(
-                    "Normal",
-                    f"{normal_probability * 100:.2f}%"
-                )
-
-
-            with col2:
-
-                st.metric(
-                    "Pneumonia",
-                    f"{pneumonia_probability * 100:.2f}%"
-                )
-
-
-            st.write(
-                f"**Final Diagnosis:** {diagnosis}"
-            )
-
-
-            st.write(
-                "**Diagnosis Confidence:** "
-                f"{diagnosis_confidence * 100:.2f}%"
-            )
-
-
-            # =================================================
-            # HISTORY
-            # =================================================
-
-            add_history(
-                f"{diagnosis} - "
-                f"{uploaded_file.name}"
-            )
-
-
-            # =================================================
-            # DIAGNOSTIC REPORT
-            # =================================================
-
-            st.divider()
-
-            st.subheader(
-                "Diagnostic Report"
-            )
-
-
-            st.write(
-                f"**File:** {uploaded_file.name}"
-            )
-
-
-            st.write(
-                "**Image modality:** Chest X-ray"
-            )
-
-
-            st.write(
-                "**X-ray verification:** "
-                f"{xray_result}"
-            )
-
-
-            st.write(
-                "**X-ray confidence:** "
-                f"{xray_confidence * 100:.2f}%"
-            )
-
-
-            st.write(
-                "**Normal probability:** "
-                f"{normal_probability * 100:.2f}%"
-            )
-
-
-            st.write(
-                "**Pneumonia probability:** "
-                f"{pneumonia_probability * 100:.2f}%"
-            )
-
-
-            st.write(
-                f"**Diagnosis:** {diagnosis}"
-            )
-
-
-            st.write(
-                "**Diagnosis confidence:** "
-                f"{diagnosis_confidence * 100:.2f}%"
-            )
-
-
-            # =================================================
-            # PDF REPORT
-            # =================================================
-
-            pdf_data = create_pdf(
-                filename=uploaded_file.name,
-                diagnosis=diagnosis,
-                diagnosis_confidence=diagnosis_confidence,
-                xray_confidence=xray_confidence,
-                normal_probability=normal_probability,
-                pneumonia_probability=pneumonia_probability
-            )
-
-
-            clean_filename = (
-                uploaded_file.name
-                .encode(
-                    "ascii",
-                    "ignore"
-                )
-                .decode(
-                    "ascii"
-                )
-            )
-
-
-            st.download_button(
-                label="Download Diagnostic Report",
-                data=pdf_data,
-                file_name=(
-                    f"Report_{clean_filename}.pdf"
-                ),
-                mime="application/pdf",
-                use_container_width=True
-            )
-
-
-    # ========================================================
-    # ERROR HANDLING
-    # ========================================================
 
     except Exception as e:
 
         st.error(
-            "An error occurred while processing "
-            "the image."
+            f"Unable to read the uploaded image: {e}"
         )
 
-        st.exception(e)
+        st.stop()
+
+    # ========================================================
+    # STAGE 1 — X-RAY VERIFICATION
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "Step 1 — Chest X-ray Verification"
+    )
+
+    with st.spinner(
+        "Checking whether the image is a chest X-ray..."
+    ):
+
+        try:
+
+            xray_result = verify_xray(
+                image
+            )
+
+        except Exception as e:
+
+            st.error(
+                "X-ray verification failed."
+            )
+
+            st.exception(e)
+
+            st.stop()
+
+    xray_probability = (
+        xray_result["xray_probability"]
+    )
+
+    non_xray_probability = (
+        xray_result["non_xray_probability"]
+    )
+
+    is_xray = xray_result["is_xray"]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "Chest X-ray Probability",
+            f"{xray_probability * 100:.2f}%"
+        )
+
+    with col2:
+
+        st.metric(
+            "Non-X-ray Probability",
+            f"{non_xray_probability * 100:.2f}%"
+        )
+
+    # ========================================================
+    # X-RAY ACCEPTED
+    # ========================================================
+
+    if is_xray:
+
+        st.success(
+            "This image is identified as a Chest X-ray."
+        )
+
+        # ====================================================
+        # STAGE 2 — PNEUMONIA DETECTION
+        # ====================================================
+
+        st.divider()
+
+        st.subheader(
+            "Step 2 — Pneumonia Detection"
+        )
+
+        with st.spinner(
+            "Analyzing the chest X-ray for pneumonia..."
+        ):
+
+            try:
+
+                pneumonia_result = predict_pneumonia(
+                    image
+                )
+
+            except Exception as e:
+
+                st.error(
+                    "Pneumonia detection failed."
+                )
+
+                st.exception(e)
+
+                st.stop()
+
+        predicted_class = (
+            pneumonia_result["class"]
+        )
+
+        pneumonia_probability = (
+            pneumonia_result[
+                "pneumonia_probability"
+            ]
+        )
+
+        normal_probability = (
+            pneumonia_result[
+                "normal_probability"
+            ]
+        )
+
+        # ====================================================
+        # RESULT
+        # ====================================================
+
+        st.subheader(
+            "Pneumonia Detection Result"
+        )
+
+        if predicted_class == "Pneumonia":
+
+            st.error(
+                "Prediction: Pneumonia"
+            )
+
+        else:
+
+            st.success(
+                "Prediction: Normal"
+            )
+
+        # ====================================================
+        # PROBABILITIES
+        # ====================================================
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            st.metric(
+                "Pneumonia Probability",
+                f"{pneumonia_probability * 100:.2f}%"
+            )
+
+        with col2:
+
+            st.metric(
+                "Normal Probability",
+                f"{normal_probability * 100:.2f}%"
+            )
+
+        st.progress(
+            float(
+                min(
+                    max(
+                        pneumonia_probability,
+                        0.0
+                    ),
+                    1.0
+                )
+            )
+        )
+
+    # ========================================================
+    # NOT AN X-RAY
+    # ========================================================
+
+    else:
+
+        st.error(
+            "This is not identified as a Chest X-ray image."
+        )
+
+        st.warning(
+            "Pneumonia detection has been stopped because "
+            "the uploaded image did not pass the chest "
+            "X-ray verification stage."
+        )
