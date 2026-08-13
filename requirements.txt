@@ -1,8 +1,7 @@
-streamlit==1.49.1
-tensorflow==2.19.0
-numpy==1.26.4
-opencv-python-headless==4.10.0.84
-Pillow==11.3.0
-fpdf2==2.8.4
-matplotlib
-scikit-learn==1.7.2
+streamlit
+tensorflow
+numpy
+pillow
+opencv-python-headless
+reportlab
+scikit-learn
