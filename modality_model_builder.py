@@ -224,16 +224,11 @@ def build_modality_classifier(
     # Validate number of classes
     # --------------------------------------------------------
 
-    if num_classes != 4:
-
-        raise ValueError(
-            "This modality classifier requires "
-            "exactly 4 classes:\n"
-            "0 = CHEST_XRAY\n"
-            "1 = CT\n"
-            "2 = MRI\n"
-            "3 = OTHER"
-        )
+   if num_classes != 3:
+    raise ValueError(
+        "This modality classifier requires exactly 3 classes: "
+        "0 = CHEST_XRAY, 1 = CT, 2 = MRI"
+    )
 
 
     # --------------------------------------------------------
