@@ -1,27 +1,35 @@
 # ============================================================
 # modality_model_builder.py
 #
-# 4-Class Medical Image Modality Classifier
+# Medical Image Modality Classifier
 #
 # Classes:
 #   0 = CHEST_XRAY
 #   1 = CT
 #   2 = MRI
-#   3 = OTHER
 #
-# IMPORTANT:
-# This architecture is intended to match the modality
-# classifier weights used by the Streamlit application.
+# Input:
+#   224 x 224 x 3
+#
+# Output:
+#   3-class softmax
 # ============================================================
 
 import tensorflow as tf
-
 from tensorflow.keras import Model
 from tensorflow.keras import layers
 
 
 # ============================================================
-# SE BLOCK
+# GELU ACTIVATION
+# ============================================================
+
+def gelu(x):
+    return tf.keras.activations.gelu(x)
+
+
+# ============================================================
+# SE ATTENTION BLOCK
 # ============================================================
 
 def se_block(
@@ -34,10 +42,14 @@ def se_block(
 
     if channels is None:
         raise ValueError(
-            "Input channel dimension must be defined."
+            "SE block requires a known channel dimension."
         )
 
-    # Squeeze
+    reduced_channels = max(
+        channels // reduction,
+        1
+    )
+
     x = layers.GlobalAveragePooling2D(
         name=f"{name}_gap"
     )(inputs)
@@ -47,25 +59,26 @@ def se_block(
         name=f"{name}_reshape"
     )(x)
 
-    # Excitation
     x = layers.Dense(
-        max(channels // reduction, 1),
+        reduced_channels,
         activation="relu",
-        name=f"{name}_dense1"
+        name=f"{name}_reduce"
     )(x)
 
     x = layers.Dense(
         channels,
         activation="sigmoid",
-        name=f"{name}_dense2"
+        name=f"{name}_expand"
     )(x)
 
-    return layers.Multiply(
-        name=f"{name}_multiply"
+    x = layers.Multiply(
+        name=f"{name}_scale"
     )([
         inputs,
         x
     ])
+
+    return x
 
 
 # ============================================================
@@ -75,14 +88,15 @@ def se_block(
 def conv_block(
     inputs,
     filters,
-    stride=1,
+    kernel_size=3,
+    strides=1,
     name="conv_block"
 ):
 
     x = layers.Conv2D(
-        filters,
-        kernel_size=3,
-        strides=stride,
+        filters=filters,
+        kernel_size=kernel_size,
+        strides=strides,
         padding="same",
         use_bias=False,
         name=f"{name}_conv"
@@ -93,7 +107,7 @@ def conv_block(
     )(x)
 
     x = layers.Activation(
-        tf.keras.activations.gelu,
+        gelu,
         name=f"{name}_gelu"
     )(x)
 
@@ -101,20 +115,20 @@ def conv_block(
 
 
 # ============================================================
-# DEPTHWISE-SEPARABLE BLOCK
+# SEPARABLE CONVOLUTIONAL BLOCK
 # ============================================================
 
-def separable_block(
+def separable_conv_block(
     inputs,
     filters,
-    stride=1,
+    strides=1,
     name="sep_block"
 ):
 
     x = layers.SeparableConv2D(
-        filters,
+        filters=filters,
         kernel_size=3,
-        strides=stride,
+        strides=strides,
         padding="same",
         use_bias=False,
         name=f"{name}_sepconv"
@@ -125,7 +139,7 @@ def separable_block(
     )(x)
 
     x = layers.Activation(
-        tf.keras.activations.gelu,
+        gelu,
         name=f"{name}_gelu"
     )(x)
 
@@ -139,17 +153,20 @@ def separable_block(
 def residual_block(
     inputs,
     filters,
-    stride=1,
+    strides=1,
     name="residual"
 ):
 
     shortcut = inputs
 
+    # --------------------------------------------------------
     # Main path
+    # --------------------------------------------------------
+
     x = layers.SeparableConv2D(
-        filters,
+        filters=filters,
         kernel_size=3,
-        strides=stride,
+        strides=strides,
         padding="same",
         use_bias=False,
         name=f"{name}_sepconv1"
@@ -160,12 +177,12 @@ def residual_block(
     )(x)
 
     x = layers.Activation(
-        tf.keras.activations.gelu,
+        gelu,
         name=f"{name}_gelu1"
     )(x)
 
     x = layers.SeparableConv2D(
-        filters,
+        filters=filters,
         kernel_size=3,
         strides=1,
         padding="same",
@@ -177,16 +194,19 @@ def residual_block(
         name=f"{name}_bn2"
     )(x)
 
-    # Shortcut projection when dimensions differ
+    # --------------------------------------------------------
+    # Shortcut projection
+    # --------------------------------------------------------
+
     if (
         inputs.shape[-1] != filters
-        or stride != 1
+        or strides != 1
     ):
 
         shortcut = layers.Conv2D(
-            filters,
+            filters=filters,
             kernel_size=1,
-            strides=stride,
+            strides=strides,
             padding="same",
             use_bias=False,
             name=f"{name}_shortcut_conv"
@@ -196,6 +216,10 @@ def residual_block(
             name=f"{name}_shortcut_bn"
         )(shortcut)
 
+    # --------------------------------------------------------
+    # Residual addition
+    # --------------------------------------------------------
+
     x = layers.Add(
         name=f"{name}_add"
     )([
@@ -204,7 +228,7 @@ def residual_block(
     ])
 
     x = layers.Activation(
-        tf.keras.activations.gelu,
+        gelu,
         name=f"{name}_output"
     )(x)
 
@@ -217,23 +241,40 @@ def residual_block(
 
 def build_modality_classifier(
     input_shape=(224, 224, 3),
-    num_classes=4
+    num_classes=3
 ):
 
-    # --------------------------------------------------------
-    # Validate number of classes
-    # --------------------------------------------------------
+    # ========================================================
+    # VALIDATION
+    # ========================================================
 
-   if num_classes != 3:
-    raise ValueError(
-        "This modality classifier requires exactly 3 classes: "
-        "0 = CHEST_XRAY, 1 = CT, 2 = MRI"
-    )
+    if num_classes != 3:
+
+        raise ValueError(
+            "This modality classifier requires exactly "
+            "3 classes:\n"
+            "0 = CHEST_XRAY\n"
+            "1 = CT\n"
+            "2 = MRI"
+        )
+
+    if len(input_shape) != 3:
+
+        raise ValueError(
+            "input_shape must be "
+            "(height, width, channels)."
+        )
+
+    if input_shape[-1] != 3:
+
+        raise ValueError(
+            "The model requires 3 input channels."
+        )
 
 
-    # --------------------------------------------------------
-    # Input
-    # --------------------------------------------------------
+    # ========================================================
+    # INPUT
+    # ========================================================
 
     inputs = layers.Input(
         shape=input_shape,
@@ -242,20 +283,19 @@ def build_modality_classifier(
 
 
     # ========================================================
-    # INITIAL FEATURE EXTRACTION
-    # ========================================================
-
-    # IMPORTANT:
-    # The modality weights show:
+    # INITIAL CONVOLUTION
     #
-    # Conv2D kernel =
+    # IMPORTANT:
+    #
+    # Your saved weights previously showed:
+    #
     # (3, 3, 3, 32)
     #
-    # Therefore the first convolution MUST have 32 filters.
-    #
+    # Therefore the first Conv2D uses 32 filters.
+    # ========================================================
 
     x = layers.Conv2D(
-        32,
+        filters=32,
         kernel_size=3,
         strides=2,
         padding="same",
@@ -268,7 +308,7 @@ def build_modality_classifier(
     )(x)
 
     x = layers.Activation(
-        tf.keras.activations.gelu,
+        gelu,
         name="activation"
     )(x)
 
@@ -277,162 +317,36 @@ def build_modality_classifier(
     # FEATURE BLOCK 1
     # ========================================================
 
-    x = separable_block(
-        x,
-        64,
-        stride=1,
+    x = layers.SeparableConv2D(
+        filters=64,
+        kernel_size=3,
+        strides=1,
+        padding="same",
+        use_bias=False,
         name="separable_conv2d"
-    )
+    )(x)
+
+    x = layers.BatchNormalization(
+        name="batch_normalization_1"
+    )(x)
+
+    x = layers.Activation(
+        gelu,
+        name="activation_1"
+    )(x)
 
 
     # ========================================================
     # FEATURE BLOCK 2
     # ========================================================
 
-    x = separable_block(
-        x,
-        128,
-        stride=2,
+    x = layers.SeparableConv2D(
+        filters=128,
+        kernel_size=3,
+        strides=2,
+        padding="same",
+        use_bias=False,
         name="separable_conv2d_1"
-    )
-
-
-    # ========================================================
-    # RESIDUAL BLOCK
-    # ========================================================
-
-    x = residual_block(
-        x,
-        128,
-        stride=1,
-        name="residual_block"
-    )
-
-
-    # ========================================================
-    # SE ATTENTION
-    # ========================================================
-
-    x = se_block(
-        x,
-        reduction=16,
-        name="se_attention"
-    )
-
-
-    # ========================================================
-    # HIGH-LEVEL FEATURES
-    # ========================================================
-
-    x = layers.Conv2D(
-        256,
-        kernel_size=3,
-        strides=2,
-        padding="same",
-        use_bias=False,
-        name="conv2d_1"
     )(x)
 
-    x = layers.BatchNormalization(
-        name="batch_normalization_2"
-    )(x)
-
-    x = layers.Activation(
-        tf.keras.activations.gelu,
-        name="activation_1"
-    )(x)
-
-
-    x = layers.Conv2D(
-        512,
-        kernel_size=3,
-        strides=2,
-        padding="same",
-        use_bias=False,
-        name="conv2d_2"
-    )(x)
-
-    x = layers.BatchNormalization(
-        name="batch_normalization_4"
-    )(x)
-
-    x = layers.Activation(
-        tf.keras.activations.gelu,
-        name="activation_2"
-    )(x)
-
-
-    # ========================================================
-    # GLOBAL FEATURES
-    # ========================================================
-
-    x = layers.GlobalAveragePooling2D(
-        name="global_average_pooling2d"
-    )(x)
-
-
-    # ========================================================
-    # CLASSIFICATION HEAD
-    # ========================================================
-
-    x = layers.Dense(
-        256,
-        activation=tf.keras.activations.gelu,
-        name="dense"
-    )(x)
-
-
-    x = layers.Dropout(
-        0.30,
-        name="dropout"
-    )(x)
-
-
-    x = layers.Dense(
-        128,
-        activation=tf.keras.activations.gelu,
-        name="dense_1"
-    )(x)
-
-
-    x = layers.Dropout(
-        0.20,
-        name="dropout_1"
-    )(x)
-
-
-    # ========================================================
-    # MODALITY CLASSIFIER HEAD
-    # ========================================================
-
-    modality_features = layers.Dense(
-        128,
-        activation=tf.keras.activations.gelu,
-        name="modality_dense"
-    )(x)
-
-
-    modality_features = layers.BatchNormalization(
-        name="modality_batch_normalization"
-    )(modality_features)
-
-
-    outputs = layers.Dense(
-        num_classes,
-        activation="softmax",
-        name="modality_probability"
-    )(modality_features)
-
-
-    # ========================================================
-    # MODEL
-    # ========================================================
-
-    model = Model(
-        inputs=inputs,
-        outputs=outputs,
-        name="Medical_Image_Modality_Classifier"
-    )
-
-
-    return model
+    x = layers
