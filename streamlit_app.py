@@ -96,7 +96,7 @@ def load_modality_model():
     )
 
     # --------------------------------------------------------
-    # Build model
+    # Build architecture
     # --------------------------------------------------------
 
     model = build_modality_classifier(
@@ -104,24 +104,20 @@ def load_modality_model():
         num_classes=3
     )
 
-    # --------------------------------------------------------
-    # NEVER allow None
-    # --------------------------------------------------------
-
     if model is None:
         raise RuntimeError(
-            "build_modality_classifier() returned None. "
-            "Check modality_model_builder.py."
+            "build_modality_classifier() returned None."
         )
 
     # --------------------------------------------------------
-    # Verify architecture
+    # Check output
     # --------------------------------------------------------
 
     if model.output_shape[-1] != 3:
+
         raise ValueError(
             "Modality classifier must have exactly "
-            "3 outputs. "
+            "3 output classes.\n"
             f"Received: {model.output_shape}"
         )
 
@@ -138,12 +134,10 @@ def load_modality_model():
     except Exception as e:
 
         raise RuntimeError(
-            "\n\n"
-            "MODALITY MODEL WEIGHT LOADING FAILED.\n\n"
-            "The file exists, but its architecture does not "
-            "match modality_model_builder.py.\n\n"
+            "The modality model architecture does not "
+            "match best_modality_classifier.weights.h5.\n\n"
             f"Weight file:\n{MODALITY_MODEL_PATH}\n\n"
-            f"Original error:\n{e}"
+            f"Original Keras error:\n{e}"
         ) from e
 
     return model
