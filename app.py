@@ -86,24 +86,24 @@ PNEUMONIA_IMAGE_SIZE = (224, 224)
 # ============================================================
 # X-RAY VERIFIER CLASS MAPPING
 # ============================================================
+# Expected training mapping:
 #
-# IMPORTANT:
+# NON_XRAY = 0
+# XRAY     = 1
 #
-# This assumes your verifier training used:
+# This is the normal alphabetical mapping produced by
+# Keras flow_from_directory() when the folders are:
 #
-# XRAY      = 0
-# NON_XRAY  = 1
-#
-# If your actual training class_indices are different,
-# change this mapping.
+# NON_XRAY/
+# XRAY/
 # ============================================================
 
 XRAY_CLASS_MAP = {
-
-    0: "X-RAY",
-
-    1: "NON-XRAY"
+    0: "NON-XRAY",
+    1: "X-RAY"
 }
+
+XRAY_CLASS_INDEX = 1
 
 
 # ============================================================
