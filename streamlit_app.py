@@ -70,22 +70,6 @@ BASE_DIR = os.path.dirname(
 #
 # ============================================================
 
-MODALITY_MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "best_modality_classifier.weights.h5"
-)
-
-MODALITY_IMAGE_SIZE = (224, 224)
-
-MODALITY_CONFIDENCE_THRESHOLD = 0.90
-
-MODALITY_CLASS_MAP = {
-    0: "CHEST_XRAY",
-    1: "CT",
-    2: "MRI"
-}
-
-MODALITY_XRAY_CLASS_INDEX = 0
 @st.cache_resource
 def load_modality_model():
 
@@ -94,22 +78,58 @@ def load_modality_model():
         "Medical image modality classifier weights"
     )
 
+    # --------------------------------------------------------
+    # Build model
+    # --------------------------------------------------------
+
     model = build_modality_classifier(
         input_shape=(224, 224, 3),
         num_classes=3
     )
 
+    # --------------------------------------------------------
+    # NEVER allow None
+    # --------------------------------------------------------
+
     if model is None:
         raise RuntimeError(
-            "build_modality_classifier() returned None."
+            "build_modality_classifier() returned None. "
+            "Check modality_model_builder.py."
         )
 
-    model.load_weights(
-        MODALITY_MODEL_PATH
-    )
+    # --------------------------------------------------------
+    # Verify architecture
+    # --------------------------------------------------------
+
+    if model.output_shape[-1] != 3:
+        raise ValueError(
+            "Modality classifier must have exactly "
+            "3 outputs. "
+            f"Received: {model.output_shape}"
+        )
+
+    # --------------------------------------------------------
+    # Load weights
+    # --------------------------------------------------------
+
+    try:
+
+        model.load_weights(
+            MODALITY_MODEL_PATH
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            "\n\n"
+            "MODALITY MODEL WEIGHT LOADING FAILED.\n\n"
+            "The file exists, but its architecture does not "
+            "match modality_model_builder.py.\n\n"
+            f"Weight file:\n{MODALITY_MODEL_PATH}\n\n"
+            f"Original error:\n{e}"
+        ) from e
 
     return model
-
 
 # ============================================================
 # IMAGE SIZES
