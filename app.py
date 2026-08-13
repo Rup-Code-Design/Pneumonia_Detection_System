@@ -62,17 +62,16 @@ st.set_page_config(
 # BASE DIRECTORY
 # ============================================================
 
-# IMPORTANT:
-# Always locate model files relative to app.py.
-#
-# This fixes:
-# FileNotFoundError:
-# best_xray_verifier.weights.h5
-#
-# when Streamlit runs from a different working directory.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
+XRAY_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_xray_verifier.weights.h5"
+)
+
+PNEUMONIA_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_exception_pneumonia_model.keras"
 )
 
 
