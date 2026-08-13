@@ -1,7 +1,7 @@
 # ============================================================
 # modality_model_builder.py
 #
-# 3-Class Medical Image Modality Classifier
+# Medical Image Modality Classifier
 #
 # Classes:
 #   0 = CHEST_XRAY
@@ -17,24 +17,14 @@ def build_modality_classifier(
     input_shape=(224, 224, 3),
     num_classes=3
 ):
-    """
-    Build the modality classifier.
-
-    IMPORTANT:
-    This function MUST return a Keras Model.
-    """
 
     if num_classes != 3:
         raise ValueError(
-            "This modality classifier requires exactly 3 classes:\n"
+            "Modality classifier requires exactly 3 classes:\n"
             "0 = CHEST_XRAY\n"
             "1 = CT\n"
             "2 = MRI"
         )
-
-    # ========================================================
-    # INPUT
-    # ========================================================
 
     inputs = layers.Input(
         shape=input_shape,
@@ -42,12 +32,12 @@ def build_modality_classifier(
     )
 
     # ========================================================
-    # BLOCK 1
+    # FEATURE EXTRACTION
     # ========================================================
 
     x = layers.Conv2D(
         32,
-        kernel_size=3,
+        (3, 3),
         strides=2,
         padding="same",
         use_bias=False,
@@ -63,13 +53,9 @@ def build_modality_classifier(
         name="activation"
     )(x)
 
-    # ========================================================
-    # BLOCK 2
-    # ========================================================
-
     x = layers.SeparableConv2D(
         64,
-        kernel_size=3,
+        (3, 3),
         padding="same",
         use_bias=False,
         name="separable_conv2d"
@@ -84,13 +70,9 @@ def build_modality_classifier(
         name="activation_1"
     )(x)
 
-    # ========================================================
-    # BLOCK 3
-    # ========================================================
-
     x = layers.SeparableConv2D(
         128,
-        kernel_size=3,
+        (3, 3),
         strides=2,
         padding="same",
         use_bias=False,
@@ -106,13 +88,9 @@ def build_modality_classifier(
         name="activation_2"
     )(x)
 
-    # ========================================================
-    # BLOCK 4
-    # ========================================================
-
     x = layers.Conv2D(
         256,
-        kernel_size=3,
+        (3, 3),
         strides=2,
         padding="same",
         use_bias=False,
@@ -160,12 +138,12 @@ def build_modality_classifier(
     )([x, se])
 
     # ========================================================
-    # BLOCK 5
+    # FINAL FEATURE BLOCK
     # ========================================================
 
     x = layers.Conv2D(
         512,
-        kernel_size=3,
+        (3, 3),
         strides=2,
         padding="same",
         use_bias=False,
@@ -182,16 +160,12 @@ def build_modality_classifier(
     )(x)
 
     # ========================================================
-    # GLOBAL FEATURES
+    # CLASSIFIER
     # ========================================================
 
     x = layers.GlobalAveragePooling2D(
         name="global_average_pooling2d_1"
     )(x)
-
-    # ========================================================
-    # CLASSIFICATION HEAD
-    # ========================================================
 
     x = layers.Dense(
         256,
@@ -214,28 +188,16 @@ def build_modality_classifier(
         name="modality_batch_normalization"
     )(x)
 
-    # ========================================================
-    # OUTPUT
-    # ========================================================
-
     outputs = layers.Dense(
         3,
         activation="softmax",
         name="modality_probability"
     )(x)
 
-    # ========================================================
-    # CREATE MODEL
-    # ========================================================
-
     model = Model(
         inputs=inputs,
         outputs=outputs,
         name="Medical_Image_Modality_Classifier"
     )
-
-    # ========================================================
-    # CRITICAL
-    # ========================================================
 
     return model
