@@ -1,12 +1,3 @@
-# ============================================================
-# xray_model_builder.py
-# 3-Class Medical Image Verifier
-#
-# 0 = X-RAY
-# 1 = CT
-# 2 = MRI
-# ============================================================
-
 import tensorflow as tf
 
 from tensorflow.keras import (
@@ -27,9 +18,19 @@ def se_block(
 
     channels = x.shape[-1]
 
+    if channels is None:
+
+        raise ValueError(
+            "Channel dimension is undefined."
+        )
+
     channels = int(channels)
 
-    se = layers.GlobalAveragePooling2D()(x)
+
+    se = layers.GlobalAveragePooling2D()(
+        x
+    )
+
 
     se = layers.Dense(
         max(
@@ -39,18 +40,25 @@ def se_block(
         activation="gelu"
     )(se)
 
+
     se = layers.Dense(
         channels,
         activation="sigmoid"
     )(se)
 
+
     se = layers.Reshape(
         (1, 1, channels)
     )(se)
 
+
     x = layers.Multiply()(
-        [x, se]
+        [
+            x,
+            se
+        ]
     )
+
 
     return x
 
@@ -62,19 +70,19 @@ def se_block(
 def conv_block(
     x,
     filters,
-    kernel_size=3,
-    strides=1
+    kernel_size=3
 ):
 
     x = layers.Conv2D(
         filters=filters,
         kernel_size=kernel_size,
-        strides=strides,
         padding="same",
         use_bias=False
     )(x)
 
-    x = layers.BatchNormalization()(x)
+    x = layers.BatchNormalization()(
+        x
+    )
 
     x = layers.Activation(
         "gelu"
@@ -94,6 +102,7 @@ def xception_block(
 
     shortcut = x
 
+
     x = layers.SeparableConv2D(
         filters=filters,
         kernel_size=3,
@@ -101,12 +110,15 @@ def xception_block(
         use_bias=False
     )(x)
 
-    x = layers.BatchNormalization()(x)
+    x = layers.BatchNormalization()(
+        x
+    )
 
     x = layers.Activation(
         "gelu"
     )(x)
 
+
     x = layers.SeparableConv2D(
         filters=filters,
         kernel_size=3,
@@ -114,7 +126,10 @@ def xception_block(
         use_bias=False
     )(x)
 
-    x = layers.BatchNormalization()(x)
+    x = layers.BatchNormalization()(
+        x
+    )
+
 
     if shortcut.shape[-1] != filters:
 
@@ -129,17 +144,24 @@ def xception_block(
             shortcut
         )
 
+
     x = layers.Add()(
-        [x, shortcut]
+        [
+            x,
+            shortcut
+        ]
     )
+
 
     x = layers.Activation(
         "gelu"
     )(x)
 
+
     x = se_block(
         x
     )
+
 
     return x
 
@@ -155,15 +177,18 @@ def residual_block(
 
     shortcut = x
 
-    x = conv_block(
-        x,
-        filters
-    )
 
     x = conv_block(
         x,
         filters
     )
+
+
+    x = conv_block(
+        x,
+        filters
+    )
+
 
     if shortcut.shape[-1] != filters:
 
@@ -178,19 +203,29 @@ def residual_block(
             shortcut
         )
 
+
     x = layers.Add()(
-        [x, shortcut]
+        [
+            x,
+            shortcut
+        ]
     )
+
 
     x = layers.Activation(
         "gelu"
     )(x)
 
+
     return x
 
 
 # ============================================================
-# BUILD 3-CLASS VERIFIER
+# 3-CLASS MEDICAL IMAGE VERIFIER
+#
+# 0 = X-RAY
+# 1 = CT
+# 2 = MRI
 # ============================================================
 
 def build_xray_classifier(
@@ -200,12 +235,13 @@ def build_xray_classifier(
 
     inputs = Input(
         shape=input_shape,
-        name="input_image"
+        name="medical_image"
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # STEM
-    # --------------------------------------------------------
+    # ========================================================
 
     x = conv_block(
         inputs,
@@ -216,9 +252,10 @@ def build_xray_classifier(
         pool_size=2
     )(x)
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # XCEPTION BLOCK
-    # --------------------------------------------------------
+    # ========================================================
 
     x = xception_block(
         x,
@@ -229,9 +266,10 @@ def build_xray_classifier(
         pool_size=2
     )(x)
 
-    # --------------------------------------------------------
-    # RESIDUAL BLOCK 1
-    # --------------------------------------------------------
+
+    # ========================================================
+    # RESIDUAL 64
+    # ========================================================
 
     x = residual_block(
         x,
@@ -242,9 +280,10 @@ def build_xray_classifier(
         pool_size=2
     )(x)
 
-    # --------------------------------------------------------
-    # RESIDUAL BLOCK 2
-    # --------------------------------------------------------
+
+    # ========================================================
+    # RESIDUAL 128
+    # ========================================================
 
     x = residual_block(
         x,
@@ -255,51 +294,75 @@ def build_xray_classifier(
         pool_size=2
     )(x)
 
-    # --------------------------------------------------------
-    # RESIDUAL BLOCK 3
-    # --------------------------------------------------------
+
+    # ========================================================
+    # FINAL RESIDUAL
+    # ========================================================
 
     x = residual_block(
         x,
         128
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
+    # GAP + GMP
+    # ========================================================
+
+    gap = layers.GlobalAveragePooling2D()(
+        x
+    )
+
+    gmp = layers.GlobalMaxPooling2D()(
+        x
+    )
+
+
+    x = layers.Concatenate()(
+        [
+            gap,
+            gmp
+        ]
+    )
+
+
+    # ========================================================
     # CLASSIFICATION HEAD
-    # --------------------------------------------------------
+    # ========================================================
 
-    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.BatchNormalization()(
+        x
+    )
 
-    x = layers.BatchNormalization()(x)
 
     x = layers.Dense(
         128,
         activation="gelu"
     )(x)
 
+
     x = layers.Dropout(
         0.30
     )(x)
 
-    # --------------------------------------------------------
-    # THREE CLASS OUTPUT
-    #
-    # 0 = X-RAY
-    # 1 = CT
-    # 2 = MRI
-    # --------------------------------------------------------
+
+    # ========================================================
+    # 3-CLASS OUTPUT
+    # ========================================================
 
     outputs = layers.Dense(
-        num_classes,
+        3,
         activation="softmax",
         dtype="float32",
         name="medical_image_classification"
     )(x)
 
+
     model = Model(
         inputs=inputs,
         outputs=outputs,
-        name="XRay_CT_MRI_Verifier"
+        name="XRay_Verifier_3Class"
     )
+
 
     return model
