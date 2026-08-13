@@ -143,9 +143,27 @@ PNEUMONIA_CLASS_MAP = {
 # X-RAY VERIFICATION SETTINGS
 # ============================================================
 
-XRAY_ACCEPT_THRESHOLD = 0.50
+# Start with 0.30 rather than 0.50.
+# After evaluating validation/test data, tune this properly.
+XRAY_ACCEPT_THRESHOLD = 0.30
 
-REQUIRE_XRAY_DOMINANCE = True
+# IMPORTANT:
+# Set this according to the class_indices printed during
+# X-ray verifier training.
+#
+# Example:
+# {
+#     "NON_XRAY": 0,
+#     "XRAY": 1
+# }
+
+NON_XRAY_CLASS_INDEX = 0
+XRAY_CLASS_INDEX = 1
+
+XRAY_CLASS_MAP = {
+    0: "NON-XRAY",
+    1: "X-RAY"
+}
 
 
 # ============================================================
@@ -1364,13 +1382,84 @@ if uploaded_file is not None:
         )
 
 
-        # ====================================================
-        # X-RAY VERIFICATION DECISION
-        # ====================================================
+        ## ============================================================
+# X-RAY DECISION
+# ============================================================
 
-        st.markdown(
-            "### X-RAY VERIFICATION DECISION"
+def verify_xray(image):
+
+    image_array = preprocess_for_xray_verifier(image)
+
+    predictions = xray_model.predict(
+        image_array,
+        verbose=0
+    )
+
+    predictions = np.asarray(predictions)
+
+    if predictions.ndim != 2 or predictions.shape[1] != 2:
+        raise ValueError(
+            f"X-ray verifier must output 2 classes. "
+            f"Received shape: {predictions.shape}"
         )
+
+    probabilities = convert_to_probabilities(
+        predictions[0]
+    )
+
+    non_xray_probability = float(
+        probabilities[NON_XRAY_CLASS_INDEX]
+    )
+
+    xray_probability = float(
+        probabilities[XRAY_CLASS_INDEX]
+    )
+
+    predicted_index = int(
+        np.argmax(probabilities)
+    )
+
+    predicted_class = XRAY_CLASS_MAP[
+        predicted_index
+    ]
+
+    # --------------------------------------------------------
+    # ACCEPTANCE
+    # --------------------------------------------------------
+    #
+    # Do not require both:
+    #
+    # X-ray >= 50%
+    # AND
+    # X-ray > Non-X-ray
+    #
+    # The threshold is the primary gate.
+    # --------------------------------------------------------
+
+    is_xray = (
+        xray_probability >= XRAY_ACCEPT_THRESHOLD
+    )
+
+    if is_xray:
+
+        result = "X-RAY"
+        confidence = xray_probability
+
+    else:
+
+        result = "NON-XRAY"
+        confidence = non_xray_probability
+
+    return {
+        "result": result,
+        "confidence": confidence,
+        "probabilities": probabilities,
+        "is_xray": is_xray,
+        "xray_probability": xray_probability,
+        "non_xray_probability": non_xray_probability,
+        "predicted_index": predicted_index,
+        "predicted_class": predicted_class
+    }
 
 
         # ----------------------------------------------------
