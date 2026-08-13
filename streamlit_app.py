@@ -21,12 +21,10 @@
 #       ↓
 # Normal / Pneumonia
 #
-# ============================================================
-
-
 import os
 import io
 
+import cv2
 import numpy as np
 import tensorflow as tf
 import streamlit as st
@@ -35,6 +33,7 @@ from PIL import Image
 from fpdf import FPDF
 
 from model_builder import build_model
+from xray_model_builder import build_xray_classifier
 from modality_model_builder import build_modality_classifier
 
 
@@ -58,6 +57,24 @@ BASE_DIR = os.path.dirname(
 )
 
 
+# ============================================================
+# MODEL PATHS
+# ============================================================
+
+MODALITY_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_modality_classifier.weights.h5"
+)
+
+XRAY_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_xray_verifier.weights.h5"
+)
+
+PNEUMONIA_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_xception_pneumonia_model.keras"
+)
 # ============================================================
 # MODEL FILES
 # ============================================================
