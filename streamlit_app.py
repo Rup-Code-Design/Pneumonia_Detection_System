@@ -1105,4 +1105,4 @@ if uploaded_file is not None:
             == "Color image detected."
         ):
 
-            st.warning(
+            st.warning()
