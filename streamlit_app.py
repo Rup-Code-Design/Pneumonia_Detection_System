@@ -248,8 +248,7 @@ with title_col2:
 st.markdown(
     """
     <div class="subtitle">
-        Automated medical image modality verification and
-        pneumonia detection
+        A deep learning based automated pneumonia detection system using chest x ray image.
     </div>
     """,
     unsafe_allow_html=True
