@@ -120,6 +120,16 @@ ICON_PATH = os.path.join(
 # IMAGE SETTINGS
 # ============================================================
 
+# IMPORTANT:
+#
+# This MUST be the same image size used while training
+# modality_classifier.keras.
+#
+# Based on your current model configuration:
+# 224 x 224 RGB
+#
+# ============================================================
+
 MODALITY_IMAGE_SIZE = (
     224,
     224
@@ -149,13 +159,13 @@ XRAY_VERIFIER_THRESHOLD = 0.50
 # MODALITY CLASS MAPPING
 # ============================================================
 #
-# THIS MUST MATCH:
+# VERIFIED FROM YOUR KAGGLE RESULT:
 #
-# train_generator.class_indices
+# CT     = 0
+# MRI    = 1
+# X-ray  = 2
 #
-# Your Kaggle result:
-#
-# {'CT': 0, 'MRI': 1, 'X-ray': 2}
+# Do NOT change these.
 #
 # ============================================================
 
@@ -324,16 +334,50 @@ GitHub repository as streamlit_app.py.
 
 
 # ============================================================
+# MODEL FILE INFORMATION
+# ============================================================
+
+def get_model_file_signature(path):
+
+    """
+    Returns a file signature that changes when the model file
+    changes.
+
+    This is used to prevent Streamlit from accidentally using
+    an old cached modality model.
+    """
+
+    validate_model_file(
+        path,
+        "Model"
+    )
+
+    stat = os.stat(path)
+
+    return (
+        stat.st_size,
+        stat.st_mtime_ns
+    )
+
+
+# ============================================================
 # LOAD MODALITY MODEL
 # ============================================================
 
 @st.cache_resource
-def load_modality_model():
+def load_modality_model(
+    file_signature
+):
+
+    # --------------------------------------------------------
+    # Validate again
+    # --------------------------------------------------------
 
     validate_model_file(
         MODALITY_MODEL_PATH,
         "Modality classifier"
     )
+
 
     try:
 
@@ -350,12 +394,15 @@ def load_modality_model():
         ) from e
 
 
-    if model.output_shape[-1] != 3:
+    # --------------------------------------------------------
+    # Validate input
+    # --------------------------------------------------------
+
+    if len(model.input_shape) != 4:
 
         raise ValueError(
-            "The modality classifier must have "
-            "3 output classes.\n"
-            f"Received: {model.output_shape}"
+            "Unexpected modality model input shape:\n"
+            f"{model.input_shape}"
         )
 
 
@@ -365,6 +412,19 @@ def load_modality_model():
             "The modality classifier must accept "
             "3-channel RGB input.\n"
             f"Received: {model.input_shape}"
+        )
+
+
+    # --------------------------------------------------------
+    # Validate output
+    # --------------------------------------------------------
+
+    if model.output_shape[-1] != 3:
+
+        raise ValueError(
+            "The modality classifier must have "
+            "3 output classes.\n"
+            f"Received: {model.output_shape}"
         )
 
 
@@ -438,11 +498,21 @@ def load_pneumonia_model():
 
 try:
 
-    modality_model = load_modality_model()
+    modality_signature = get_model_file_signature(
+        MODALITY_MODEL_PATH
+    )
+
+
+    modality_model = load_modality_model(
+        modality_signature
+    )
+
 
     xray_verifier_model = load_xray_verifier()
 
+
     pneumonia_model = load_pneumonia_model()
+
 
 except Exception as e:
 
@@ -475,7 +545,7 @@ if pneumonia_model.output_shape[-1] != 2:
 
 
 # ============================================================
-# CONVERT OUTPUT TO PROBABILITIES
+# CONVERT MODEL OUTPUT TO PROBABILITIES
 # ============================================================
 
 def convert_to_probabilities(
@@ -702,14 +772,100 @@ def validate_image(
 
 
 # ============================================================
+# MODALITY PREPROCESSING
+# ============================================================
+#
+# THIS PATH MUST MATCH THE TRAINING PIPELINE:
+#
+# ImageDataGenerator(
+#     rescale=1.0 / 255.0
+# )
+#
+# flow_from_directory(
+#     target_size=(224, 224),
+#     color_mode="rgb"
+# )
+#
+# The default Keras directory-loader interpolation is
+# nearest-neighbor, therefore NEAREST is intentionally used.
+#
+# ============================================================
+
+def preprocess_modality_image(
+    image
+):
+
+    # --------------------------------------------------------
+    # EXIF orientation
+    # --------------------------------------------------------
+
+    image = ImageOps.exif_transpose(
+        image
+    )
+
+
+    # --------------------------------------------------------
+    # RGB
+    # --------------------------------------------------------
+
+    image = image.convert(
+        "RGB"
+    )
+
+
+    # --------------------------------------------------------
+    # Resize
+    # --------------------------------------------------------
+
+    image = image.resize(
+        MODALITY_IMAGE_SIZE,
+        Image.Resampling.NEAREST
+    )
+
+
+    # --------------------------------------------------------
+    # Convert to float32
+    # --------------------------------------------------------
+
+    image_array = np.asarray(
+        image,
+        dtype=np.float32
+    )
+
+
+    # --------------------------------------------------------
+    # Same normalization as ImageDataGenerator:
+    #
+    # rescale = 1/255
+    # --------------------------------------------------------
+
+    image_array = (
+        image_array / 255.0
+    )
+
+
+    # --------------------------------------------------------
+    # Batch dimension
+    # --------------------------------------------------------
+
+    image_array = np.expand_dims(
+        image_array,
+        axis=0
+    )
+
+
+    return image_array
+
+
+# ============================================================
 # GENERAL PREPROCESSING
 #
-# USED BY:
+# Used by:
 #   X-ray verifier
 #   Pneumonia model
 #
-# DO NOT CHANGE THIS BECAUSE YOUR VERIFIER IS CURRENTLY
-# WORKING WITH THIS PIPELINE.
+# This is intentionally kept separate from modality
+# preprocessing.
 # ============================================================
 
 def preprocess_image(
@@ -752,98 +908,6 @@ def preprocess_image(
 
 
 # ============================================================
-# MODALITY-SPECIFIC PREPROCESSING
-#
-# IMPORTANT:
-#
-# The modality model was trained with:
-#
-# ImageDataGenerator(
-#     rescale=1.0 / 255.0
-# )
-#
-# and flow_from_directory().
-#
-# Therefore the modality inference path is kept separate
-# from the X-ray verifier preprocessing.
-#
-# ============================================================
-
-def preprocess_modality_image(
-    image
-):
-
-    # --------------------------------------------------------
-    # EXIF orientation
-    # --------------------------------------------------------
-
-    image = ImageOps.exif_transpose(
-        image
-    )
-
-
-    # --------------------------------------------------------
-    # RGB
-    #
-    # Training used:
-    #
-    # color_mode="rgb"
-    #
-    # --------------------------------------------------------
-
-    image = image.convert(
-        "RGB"
-    )
-
-
-    # --------------------------------------------------------
-    # Resize
-    #
-    # Keep preprocessing conservative and close to the
-    # directory-loader training pipeline.
-    # --------------------------------------------------------
-
-    image = image.resize(
-        MODALITY_IMAGE_SIZE,
-        Image.Resampling.NEAREST
-    )
-
-
-    # --------------------------------------------------------
-    # uint8 -> float32
-    # --------------------------------------------------------
-
-    image_array = np.asarray(
-        image,
-        dtype=np.float32
-    )
-
-
-    # --------------------------------------------------------
-    # Same normalization used during training
-    #
-    # rescale=1/255
-    # --------------------------------------------------------
-
-    image_array = (
-        image_array / 255.0
-    )
-
-
-    # --------------------------------------------------------
-    # Add batch dimension
-    # --------------------------------------------------------
-
-    image_array = np.expand_dims(
-        image_array,
-        axis=0
-    )
-
-
-    return image_array
-
-
-# ============================================================
 # MODALITY PREDICTION
 # ============================================================
 
@@ -856,6 +920,10 @@ def predict_modality(
     )
 
 
+    # --------------------------------------------------------
+    # Model prediction
+    # --------------------------------------------------------
+
     prediction = modality_model.predict(
         image_array,
         verbose=0
@@ -863,29 +931,57 @@ def predict_modality(
 
 
     prediction = np.asarray(
-        prediction
+        prediction,
+        dtype=np.float64
     )
 
 
+    # --------------------------------------------------------
+    # Validate output
+    # --------------------------------------------------------
+
     if (
         prediction.ndim != 2
+        or
+        prediction.shape[0] != 1
         or
         prediction.shape[1] != 3
     ):
 
         raise ValueError(
             "Modality classifier must output "
-            f"3 classes. Received: "
-            f"{prediction.shape}"
+            "shape (1, 3).\n"
+            f"Received: {prediction.shape}"
         )
 
+
+    # --------------------------------------------------------
+    # Preserve raw output for diagnostics
+    # --------------------------------------------------------
+
+    raw_output = prediction[0].copy()
+
+
+    # --------------------------------------------------------
+    # Convert to probabilities
+    # --------------------------------------------------------
 
     probabilities = (
         convert_to_probabilities(
-            prediction[0]
+            raw_output
         )
     )
 
+
+    probabilities = np.asarray(
+        probabilities,
+        dtype=np.float64
+    )
+
+
+    # --------------------------------------------------------
+    # Predicted class
+    # --------------------------------------------------------
 
     predicted_index = int(
         np.argmax(
@@ -910,7 +1006,23 @@ def predict_modality(
         "index": predicted_index,
         "class": modality,
         "confidence": confidence,
-        "probabilities": probabilities
+        "probabilities": probabilities,
+        "raw_output": raw_output,
+        "input_shape": tuple(
+            image_array.shape
+        ),
+        "input_min": float(
+            np.min(image_array)
+        ),
+        "input_max": float(
+            np.max(image_array)
+        ),
+        "input_mean": float(
+            np.mean(image_array)
+        ),
+        "input_std": float(
+            np.std(image_array)
+        )
     }
 
 
@@ -1914,7 +2026,7 @@ if uploaded_file is not None:
 
                 st.write(
                     f"**{label}: "
-                    f"{probability:.2f}%**"
+                    f"{probability:.4f}%**"
                 )
 
 
@@ -1930,7 +2042,7 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # IMPORTANT DIAGNOSTIC INFORMATION
+        # TECHNICAL MODALITY INFORMATION
         # ====================================================
 
         with st.expander(
@@ -1942,28 +2054,79 @@ if uploaded_file is not None:
                 f"**{modality_result['index']}**"
             )
 
+
             st.write(
                 "Class mapping: "
                 "**0 = CT, 1 = MRI, 2 = X-ray**"
             )
 
+
             st.write(
-                f"Input size used: "
+                f"Input tensor shape: "
+                f"**{modality_result['input_shape']}**"
+            )
+
+
+            st.write(
+                f"Input size: "
                 f"**{MODALITY_IMAGE_SIZE[0]} × "
                 f"{MODALITY_IMAGE_SIZE[1]}**"
             )
 
+
             st.write(
                 "Input channels: **RGB (3 channels)**"
             )
+
+
+            st.write(
+                "Interpolation: **NEAREST**"
+            )
+
 
             st.write(
                 "Normalization: **pixel / 255.0**"
             )
 
 
+            st.write(
+                f"Input minimum: "
+                f"**{modality_result['input_min']:.6f}**"
+            )
+
+
+            st.write(
+                f"Input maximum: "
+                f"**{modality_result['input_max']:.6f}**"
+            )
+
+
+            st.write(
+                f"Input mean: "
+                f"**{modality_result['input_mean']:.6f}**"
+            )
+
+
+            st.write(
+                f"Input standard deviation: "
+                f"**{modality_result['input_std']:.6f}**"
+            )
+
+
+            st.write(
+                f"Raw model output: "
+                f"**{np.array2string(modality_result['raw_output'], precision=8)}**"
+            )
+
+
+            st.write(
+                f"Modality model file size: "
+                f"**{os.path.getsize(MODALITY_MODEL_PATH):,} bytes**"
+            )
+
+
         # ====================================================
-        # STEP 3 — CT / MRI STOP
+        # CT / MRI STOP
         # ====================================================
 
         if modality in (
