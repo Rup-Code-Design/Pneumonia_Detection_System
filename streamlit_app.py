@@ -1553,8 +1553,8 @@ def create_pdf_report(
         pneumonia_table = Table(
             pneumonia_data,
             colWidths=[
-                70 * mm,
-                80 * mm
+                40 * mm,
+                60 * mm
             ]
         )
 
@@ -1786,7 +1786,7 @@ if uploaded_file is not None:
     # ========================================================
 
     analyze = st.button(
-        "Analyze",
+        "Verify Your Image",
         type="primary",
         use_container_width=True
     )
