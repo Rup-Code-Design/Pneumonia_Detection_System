@@ -1282,8 +1282,8 @@ def create_pdf_report(
 
     report_image = RLImage(
         image_buffer,
-        width=50 * mm,
-        height=50 * mm
+        width=100 * mm,
+        height=100 * mm
     )
 
 
