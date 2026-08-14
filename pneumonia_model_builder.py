@@ -1,6 +1,17 @@
 # ============================================================
 # pneumonia_model_builder.py
 # PROPOSED PNEUMONIA MODEL
+#
+# Architecture:
+# Xception-style blocks
+# + SE Attention
+# + Residual Block
+# + GAP + GMP Feature Fusion
+# + GELU Classifier
+#
+# CLASSIFICATION:
+# 0 = Normal
+# 1 = Pneumonia
 # ============================================================
 
 import tensorflow as tf
@@ -10,6 +21,18 @@ from tensorflow.keras import (
     Model,
     Input
 )
+
+
+# ============================================================
+# CLASS CONFIGURATION
+# ============================================================
+
+NUM_CLASSES = 2
+
+CLASS_NAMES = [
+    "Normal",
+    "Pneumonia"
+]
 
 
 # ============================================================
@@ -23,28 +46,59 @@ def se_block(
 
     channels = x.shape[-1]
 
-    se = layers.GlobalAveragePooling2D()(
-        x
-    )
+    if channels is None:
+        raise ValueError(
+            "The number of channels must be known "
+            "before applying SE attention."
+        )
+
+    # --------------------------------------------------------
+    # Global Average Pooling
+    # --------------------------------------------------------
+
+    se = layers.GlobalAveragePooling2D(
+        name="se_global_average_pooling"
+    )(x)
+
+    # --------------------------------------------------------
+    # Bottleneck
+    # --------------------------------------------------------
 
     se = layers.Dense(
         max(
             channels // reduction,
             4
         ),
-        activation="gelu"
+        activation="gelu",
+        name="se_dense_1"
     )(se)
+
+    # --------------------------------------------------------
+    # Channel Attention
+    # --------------------------------------------------------
 
     se = layers.Dense(
         channels,
-        activation="sigmoid"
+        activation="sigmoid",
+        name="se_dense_2"
     )(se)
+
+    # --------------------------------------------------------
+    # Reshape
+    # --------------------------------------------------------
 
     se = layers.Reshape(
-        (1, 1, channels)
+        (1, 1, channels),
+        name="se_reshape"
     )(se)
 
-    x = layers.Multiply()(
+    # --------------------------------------------------------
+    # Channel-wise multiplication
+    # --------------------------------------------------------
+
+    x = layers.Multiply(
+        name="se_multiply"
+    )(
         [
             x,
             se
@@ -102,7 +156,7 @@ def xception_block(
     )
 
     # --------------------------------------------------------
-    # SHORTCUT
+    # SHORTCUT PROJECTION
     # --------------------------------------------------------
 
     if (
@@ -123,7 +177,7 @@ def xception_block(
         )
 
     # --------------------------------------------------------
-    # RESIDUAL ADD
+    # RESIDUAL ADDITION
     # --------------------------------------------------------
 
     x = layers.Add()(
@@ -138,7 +192,7 @@ def xception_block(
     )(x)
 
     # --------------------------------------------------------
-    # SE
+    # SE ATTENTION
     # --------------------------------------------------------
 
     x = se_block(
@@ -196,7 +250,7 @@ def residual_block(
     )
 
     # --------------------------------------------------------
-    # SHORTCUT
+    # SHORTCUT PROJECTION
     # --------------------------------------------------------
 
     if (
@@ -217,7 +271,7 @@ def residual_block(
         )
 
     # --------------------------------------------------------
-    # ADD
+    # RESIDUAL ADDITION
     # --------------------------------------------------------
 
     x = layers.Add()(
@@ -235,16 +289,34 @@ def residual_block(
 
 
 # ============================================================
-# PROPOSED MODEL
+# PROPOSED PNEUMONIA MODEL
 # ============================================================
 
 def build_model(
     input_shape=(224, 224, 3),
-    num_classes=2
+    num_classes=NUM_CLASSES
 ):
 
+    # --------------------------------------------------------
+    # Safety check
+    # --------------------------------------------------------
+
+    if num_classes != 2:
+
+        raise ValueError(
+            "This pneumonia model is designed "
+            "for exactly 2 classes:\n"
+            "0 = Normal\n"
+            "1 = Pneumonia"
+        )
+
+    # --------------------------------------------------------
+    # INPUT
+    # --------------------------------------------------------
+
     inputs = Input(
-        shape=input_shape
+        shape=input_shape,
+        name="pneumonia_input"
     )
 
     # ========================================================
@@ -283,18 +355,28 @@ def build_model(
     )
 
     # ========================================================
-    # GAP + GMP FUSION
+    # GLOBAL AVERAGE POOLING
     # ========================================================
 
-    gap = layers.GlobalAveragePooling2D()(
-        x
-    )
+    gap = layers.GlobalAveragePooling2D(
+        name="global_average_pooling"
+    )(x)
 
-    gmp = layers.GlobalMaxPooling2D()(
-        x
-    )
+    # ========================================================
+    # GLOBAL MAX POOLING
+    # ========================================================
 
-    x = layers.Concatenate()(
+    gmp = layers.GlobalMaxPooling2D(
+        name="global_max_pooling"
+    )(x)
+
+    # ========================================================
+    # GAP + GMP FEATURE FUSION
+    # ========================================================
+
+    x = layers.Concatenate(
+        name="gap_gmp_fusion"
+    )(
         [
             gap,
             gmp
@@ -302,38 +384,56 @@ def build_model(
     )
 
     # ========================================================
-    # CLASSIFIER
+    # BATCH NORMALIZATION
     # ========================================================
 
-    x = layers.BatchNormalization()(
-        x
-    )
+    x = layers.BatchNormalization(
+        name="classifier_batch_normalization"
+    )(x)
+
+    # ========================================================
+    # DENSE CLASSIFIER
+    # ========================================================
 
     x = layers.Dense(
         128,
-        activation="gelu"
-    )(x)
-
-    x = layers.Dropout(
-        0.3
+        activation="gelu",
+        name="classifier_dense"
     )(x)
 
     # ========================================================
-    # TWO CLASSES
+    # DROPOUT
+    # ========================================================
+
+    x = layers.Dropout(
+        0.3,
+        name="classifier_dropout"
+    )(x)
+
+    # ========================================================
+    # FINAL TWO-CLASS OUTPUT
+    #
+    # IMPORTANT:
     #
     # 0 = Normal
     # 1 = Pneumonia
+    #
+    # The training dataset MUST use the same mapping.
     # ========================================================
 
     outputs = layers.Dense(
-        num_classes,
+        2,
         activation="softmax",
         name="pneumonia_probability"
     )(x)
 
+    # ========================================================
+    # MODEL
+    # ========================================================
+
     model = Model(
-        inputs,
-        outputs,
+        inputs=inputs,
+        outputs=outputs,
         name="Xception_SE_Residual_Pneumonia"
     )
 
