@@ -46,7 +46,7 @@ import numpy as np
 import streamlit as st
 import tensorflow as tf
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -107,7 +107,7 @@ PNEUMONIA_MODEL_PATH = os.path.join(
 
 
 # ============================================================
-# ICON PATH
+# ICON
 # ============================================================
 
 ICON_PATH = os.path.join(
@@ -117,17 +117,7 @@ ICON_PATH = os.path.join(
 
 
 # ============================================================
-# IMAGE SETTINGS
-# ============================================================
-
-# IMPORTANT:
-#
-# This MUST be the same image size used while training
-# modality_classifier.keras.
-#
-# Based on your current model configuration:
-# 224 x 224 RGB
-#
+# IMAGE SIZES
 # ============================================================
 
 MODALITY_IMAGE_SIZE = (
@@ -158,16 +148,6 @@ XRAY_VERIFIER_THRESHOLD = 0.50
 # ============================================================
 # MODALITY CLASS MAPPING
 # ============================================================
-#
-# VERIFIED FROM YOUR KAGGLE RESULT:
-#
-# CT     = 0
-# MRI    = 1
-# X-ray  = 2
-#
-# Do NOT change these.
-#
-# ============================================================
 
 MODALITY_CLASS_MAP = {
     0: "CT",
@@ -194,12 +174,10 @@ PNEUMONIA_CLASS_MAP = {
 # ============================================================
 
 if "analysis_result" not in st.session_state:
-
     st.session_state.analysis_result = None
 
 
 if "pdf_report" not in st.session_state:
-
     st.session_state.pdf_report = None
 
 
@@ -334,50 +312,16 @@ GitHub repository as streamlit_app.py.
 
 
 # ============================================================
-# MODEL FILE INFORMATION
-# ============================================================
-
-def get_model_file_signature(path):
-
-    """
-    Returns a file signature that changes when the model file
-    changes.
-
-    This is used to prevent Streamlit from accidentally using
-    an old cached modality model.
-    """
-
-    validate_model_file(
-        path,
-        "Model"
-    )
-
-    stat = os.stat(path)
-
-    return (
-        stat.st_size,
-        stat.st_mtime_ns
-    )
-
-
-# ============================================================
 # LOAD MODALITY MODEL
 # ============================================================
 
 @st.cache_resource
-def load_modality_model(
-    file_signature
-):
-
-    # --------------------------------------------------------
-    # Validate again
-    # --------------------------------------------------------
+def load_modality_model():
 
     validate_model_file(
         MODALITY_MODEL_PATH,
         "Modality classifier"
     )
-
 
     try:
 
@@ -394,15 +338,12 @@ def load_modality_model(
         ) from e
 
 
-    # --------------------------------------------------------
-    # Validate input
-    # --------------------------------------------------------
-
-    if len(model.input_shape) != 4:
+    if model.output_shape[-1] != 3:
 
         raise ValueError(
-            "Unexpected modality model input shape:\n"
-            f"{model.input_shape}"
+            "The modality classifier must have "
+            "3 output classes.\n"
+            f"Received: {model.output_shape}"
         )
 
 
@@ -412,19 +353,6 @@ def load_modality_model(
             "The modality classifier must accept "
             "3-channel RGB input.\n"
             f"Received: {model.input_shape}"
-        )
-
-
-    # --------------------------------------------------------
-    # Validate output
-    # --------------------------------------------------------
-
-    if model.output_shape[-1] != 3:
-
-        raise ValueError(
-            "The modality classifier must have "
-            "3 output classes.\n"
-            f"Received: {model.output_shape}"
         )
 
 
@@ -498,21 +426,11 @@ def load_pneumonia_model():
 
 try:
 
-    modality_signature = get_model_file_signature(
-        MODALITY_MODEL_PATH
-    )
-
-
-    modality_model = load_modality_model(
-        modality_signature
-    )
-
+    modality_model = load_modality_model()
 
     xray_verifier_model = load_xray_verifier()
 
-
     pneumonia_model = load_pneumonia_model()
-
 
 except Exception as e:
 
@@ -545,7 +463,7 @@ if pneumonia_model.output_shape[-1] != 2:
 
 
 # ============================================================
-# CONVERT MODEL OUTPUT TO PROBABILITIES
+# CONVERT OUTPUT TO PROBABILITIES
 # ============================================================
 
 def convert_to_probabilities(
@@ -578,7 +496,7 @@ def convert_to_probabilities(
 
 
     # --------------------------------------------------------
-    # Otherwise treat as logits
+    # Otherwise logits
     # --------------------------------------------------------
 
     return tf.nn.softmax(
@@ -661,10 +579,6 @@ def validate_image(
     width, height = image.size
 
 
-    # --------------------------------------------------------
-    # Minimum resolution
-    # --------------------------------------------------------
-
     if width < 64 or height < 64:
 
         return (
@@ -672,10 +586,6 @@ def validate_image(
             "Image resolution is too small."
         )
 
-
-    # --------------------------------------------------------
-    # Check image data
-    # --------------------------------------------------------
 
     array = np.asarray(
         image
@@ -689,10 +599,6 @@ def validate_image(
             "Image is empty."
         )
 
-
-    # --------------------------------------------------------
-    # Color check
-    # --------------------------------------------------------
 
     is_color, difference = (
         check_color_image(
@@ -709,19 +615,11 @@ def validate_image(
         )
 
 
-    # --------------------------------------------------------
-    # Convert to grayscale
-    # --------------------------------------------------------
-
     gray = np.asarray(
         image.convert("L"),
         dtype=np.float32
     )
 
-
-    # --------------------------------------------------------
-    # Blank image
-    # --------------------------------------------------------
 
     if np.std(gray) < 8:
 
@@ -730,10 +628,6 @@ def validate_image(
             "Image appears blank or invalid."
         )
 
-
-    # --------------------------------------------------------
-    # Almost black
-    # --------------------------------------------------------
 
     dark_ratio = np.mean(
         gray < 10
@@ -747,10 +641,6 @@ def validate_image(
             "Image is almost completely black."
         )
 
-
-    # --------------------------------------------------------
-    # Almost white
-    # --------------------------------------------------------
 
     bright_ratio = np.mean(
         gray > 245
@@ -772,100 +662,11 @@ def validate_image(
 
 
 # ============================================================
-# MODALITY PREPROCESSING
-# ============================================================
-#
-# THIS PATH MUST MATCH THE TRAINING PIPELINE:
-#
-# ImageDataGenerator(
-#     rescale=1.0 / 255.0
-# )
-#
-# flow_from_directory(
-#     target_size=(224, 224),
-#     color_mode="rgb"
-# )
-#
-# The default Keras directory-loader interpolation is
-# nearest-neighbor, therefore NEAREST is intentionally used.
-#
-# ============================================================
-
-def preprocess_modality_image(
-    image
-):
-
-    # --------------------------------------------------------
-    # EXIF orientation
-    # --------------------------------------------------------
-
-    image = ImageOps.exif_transpose(
-        image
-    )
-
-
-    # --------------------------------------------------------
-    # RGB
-    # --------------------------------------------------------
-
-    image = image.convert(
-        "RGB"
-    )
-
-
-    # --------------------------------------------------------
-    # Resize
-    # --------------------------------------------------------
-
-    image = image.resize(
-        MODALITY_IMAGE_SIZE,
-        Image.Resampling.NEAREST
-    )
-
-
-    # --------------------------------------------------------
-    # Convert to float32
-    # --------------------------------------------------------
-
-    image_array = np.asarray(
-        image,
-        dtype=np.float32
-    )
-
-
-    # --------------------------------------------------------
-    # Same normalization as ImageDataGenerator:
-    #
-    # rescale = 1/255
-    # --------------------------------------------------------
-
-    image_array = (
-        image_array / 255.0
-    )
-
-
-    # --------------------------------------------------------
-    # Batch dimension
-    # --------------------------------------------------------
-
-    image_array = np.expand_dims(
-        image_array,
-        axis=0
-    )
-
-
-    return image_array
-
-
-# ============================================================
 # GENERAL PREPROCESSING
 #
-# Used by:
-#   X-ray verifier
-#   Pneumonia model
-#
-# This is intentionally kept separate from modality
-# preprocessing.
+# USED BY:
+#   X-RAY VERIFIER
+#   PNEUMONIA MODEL
 # ============================================================
 
 def preprocess_image(
@@ -908,121 +709,381 @@ def preprocess_image(
 
 
 # ============================================================
-# MODALITY PREDICTION
+# MODALITY PREPROCESSING
+#
+# ORIGINAL TRAINING PIPELINE:
+#
+# ImageDataGenerator(
+#     rescale=1.0 / 255.0
+# )
+#
+# flow_from_directory()
+#
+# ============================================================
+
+def preprocess_modality_variant(
+    image,
+    variant="original"
+):
+
+    image = ImageOps.exif_transpose(
+        image
+    )
+
+
+    image = image.convert(
+        "RGB"
+    )
+
+
+    # --------------------------------------------------------
+    # Variant 1: ORIGINAL
+    #
+    # This is closest to your Kaggle pipeline.
+    # --------------------------------------------------------
+
+    if variant == "original":
+
+        processed = image
+
+
+    # --------------------------------------------------------
+    # Variant 2: BILINEAR
+    #
+    # Some pretrained CNNs behave differently depending
+    # on interpolation.
+    # --------------------------------------------------------
+
+    elif variant == "bilinear":
+
+        processed = image.resize(
+            MODALITY_IMAGE_SIZE,
+            Image.Resampling.BILINEAR
+        )
+
+
+        array = np.asarray(
+            processed,
+            dtype=np.float32
+        ) / 255.0
+
+
+        return np.expand_dims(
+            array,
+            axis=0
+        )
+
+
+    # --------------------------------------------------------
+    # Variant 3: BICUBIC
+    # --------------------------------------------------------
+
+    elif variant == "bicubic":
+
+        processed = image.resize(
+            MODALITY_IMAGE_SIZE,
+            Image.Resampling.BICUBIC
+        )
+
+
+        array = np.asarray(
+            processed,
+            dtype=np.float32
+        ) / 255.0
+
+
+        return np.expand_dims(
+            array,
+            axis=0
+        )
+
+
+    # --------------------------------------------------------
+    # Variant 4: AUTO CONTRAST
+    #
+    # Useful for CT images with low dynamic range.
+    # --------------------------------------------------------
+
+    elif variant == "autocontrast":
+
+        gray = image.convert(
+            "L"
+        )
+
+        gray = ImageOps.autocontrast(
+            gray
+        )
+
+        processed = gray.convert(
+            "RGB"
+        )
+
+
+    # --------------------------------------------------------
+    # Variant 5: CONTRAST ENHANCED
+    # --------------------------------------------------------
+
+    elif variant == "contrast":
+
+        gray = image.convert(
+            "L"
+        )
+
+        gray = ImageOps.autocontrast(
+            gray
+        )
+
+        gray = ImageEnhance.Contrast(
+            gray
+        ).enhance(1.25)
+
+        processed = gray.convert(
+            "RGB"
+        )
+
+
+    # --------------------------------------------------------
+    # Variant 6: INVERTED
+    #
+    # CT datasets can contain different grayscale polarity.
+    # --------------------------------------------------------
+
+    elif variant == "inverted":
+
+        gray = image.convert(
+            "L"
+        )
+
+        gray = ImageOps.autocontrast(
+            gray
+        )
+
+        gray = ImageOps.invert(
+            gray
+        )
+
+        processed = gray.convert(
+            "RGB"
+        )
+
+
+    else:
+
+        raise ValueError(
+            f"Unknown modality preprocessing variant: "
+            f"{variant}"
+        )
+
+
+    # --------------------------------------------------------
+    # ORIGINAL / AUTOCONTRAST / CONTRAST / INVERTED
+    # --------------------------------------------------------
+
+    processed = processed.resize(
+        MODALITY_IMAGE_SIZE,
+        Image.Resampling.NEAREST
+    )
+
+
+    image_array = np.asarray(
+        processed,
+        dtype=np.float32
+    )
+
+
+    image_array /= 255.0
+
+
+    image_array = np.expand_dims(
+        image_array,
+        axis=0
+    )
+
+
+    return image_array
+
+
+# ============================================================
+# MODALITY PREDICTION WITH TTA
 # ============================================================
 
 def predict_modality(
     image
 ):
 
-    image_array = preprocess_modality_image(
-        image
-    )
-
-
     # --------------------------------------------------------
-    # Model prediction
+    # IMPORTANT
+    #
+    # Original is weighted more heavily because it exactly
+    # follows the training preprocessing.
     # --------------------------------------------------------
 
-    prediction = modality_model.predict(
-        image_array,
-        verbose=0
-    )
+    variants = [
+        ("original", 0.40),
+        ("bilinear", 0.10),
+        ("bicubic", 0.10),
+        ("autocontrast", 0.15),
+        ("contrast", 0.10),
+        ("inverted", 0.15)
+    ]
 
 
-    prediction = np.asarray(
-        prediction,
+    all_predictions = []
+
+
+    weighted_probability = np.zeros(
+        3,
         dtype=np.float64
     )
 
 
-    # --------------------------------------------------------
-    # Validate output
-    # --------------------------------------------------------
+    variant_results = []
 
-    if (
-        prediction.ndim != 2
-        or
-        prediction.shape[0] != 1
-        or
-        prediction.shape[1] != 3
-    ):
 
-        raise ValueError(
-            "Modality classifier must output "
-            "shape (1, 3).\n"
-            f"Received: {prediction.shape}"
+    for variant_name, weight in variants:
+
+        image_array = (
+            preprocess_modality_variant(
+                image,
+                variant_name
+            )
+        )
+
+
+        prediction = modality_model.predict(
+            image_array,
+            verbose=0
+        )
+
+
+        prediction = np.asarray(
+            prediction
+        )
+
+
+        if (
+            prediction.ndim != 2
+            or
+            prediction.shape[1] != 3
+        ):
+
+            raise ValueError(
+                "Modality classifier must output "
+                "3 classes. Received: "
+                f"{prediction.shape}"
+            )
+
+
+        probabilities = (
+            convert_to_probabilities(
+                prediction[0]
+            )
+        )
+
+
+        weighted_probability += (
+            weight * probabilities
+        )
+
+
+        variant_index = int(
+            np.argmax(
+                probabilities
+            )
+        )
+
+
+        variant_results.append(
+            {
+                "variant": variant_name,
+                "index": variant_index,
+                "class": MODALITY_CLASS_MAP[
+                    variant_index
+                ],
+                "ct": float(
+                    probabilities[0]
+                ),
+                "mri": float(
+                    probabilities[1]
+                ),
+                "xray": float(
+                    probabilities[2]
+                )
+            }
+        )
+
+
+        all_predictions.append(
+            probabilities
         )
 
 
     # --------------------------------------------------------
-    # Preserve raw output for diagnostics
+    # Normalize weighted probabilities
     # --------------------------------------------------------
 
-    raw_output = prediction[0].copy()
+    probability_sum = np.sum(
+        weighted_probability
+    )
 
 
-    # --------------------------------------------------------
-    # Convert to probabilities
-    # --------------------------------------------------------
+    if probability_sum > 0:
 
-    probabilities = (
-        convert_to_probabilities(
-            raw_output
+        weighted_probability /= (
+            probability_sum
         )
-    )
-
-
-    probabilities = np.asarray(
-        probabilities,
-        dtype=np.float64
-    )
 
 
     # --------------------------------------------------------
-    # Predicted class
+    # Final prediction
     # --------------------------------------------------------
 
     predicted_index = int(
         np.argmax(
-            probabilities
+            weighted_probability
         )
     )
 
 
     confidence = float(
-        probabilities[
+        weighted_probability[
             predicted_index
         ]
     )
 
 
-    modality = MODALITY_CLASS_MAP[
-        predicted_index
-    ]
+    modality = (
+        MODALITY_CLASS_MAP[
+            predicted_index
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # Calculate vote counts
+    # --------------------------------------------------------
+
+    vote_counts = {
+        "CT": 0,
+        "MRI": 0,
+        "X-ray": 0
+    }
+
+
+    for result in variant_results:
+
+        vote_counts[
+            result["class"]
+        ] += 1
 
 
     return {
         "index": predicted_index,
         "class": modality,
         "confidence": confidence,
-        "probabilities": probabilities,
-        "raw_output": raw_output,
-        "input_shape": tuple(
-            image_array.shape
-        ),
-        "input_min": float(
-            np.min(image_array)
-        ),
-        "input_max": float(
-            np.max(image_array)
-        ),
-        "input_mean": float(
-            np.mean(image_array)
-        ),
-        "input_std": float(
-            np.std(image_array)
-        )
+        "probabilities": weighted_probability,
+        "variant_results": variant_results,
+        "vote_counts": vote_counts
     }
 
 
@@ -1052,8 +1113,6 @@ def predict_xray_verification(
 
 
     # ========================================================
-    # CASE 1
-    #
     # SIGMOID
     #
     # 0 = NON-X-RAY
@@ -1106,9 +1165,7 @@ def predict_xray_verification(
 
 
     # ========================================================
-    # CASE 2
-    #
-    # TWO-CLASS SOFTMAX
+    # TWO CLASS
     #
     # 0 = NON-X-RAY
     # 1 = X-RAY
@@ -1315,10 +1372,6 @@ def create_pdf_report(
     story = []
 
 
-    # ========================================================
-    # TITLE
-    # ========================================================
-
     story.append(
         Paragraph(
             "PNEUMONIA DETECTION SYSTEM<br/>"
@@ -1335,10 +1388,6 @@ def create_pdf_report(
         )
     )
 
-
-    # ========================================================
-    # DATE
-    # ========================================================
 
     report_time = datetime.now().strftime(
         "%d %B %Y, %I:%M:%S %p"
@@ -1360,10 +1409,6 @@ def create_pdf_report(
         )
     )
 
-
-    # ========================================================
-    # IMAGE
-    # ========================================================
 
     image_buffer = io.BytesIO()
 
@@ -1398,7 +1443,7 @@ def create_pdf_report(
 
 
     # ========================================================
-    # MODALITY RESULT
+    # MODALITY
     # ========================================================
 
     modality = modality_result["class"]
@@ -1590,7 +1635,7 @@ def create_pdf_report(
 
 
     # ========================================================
-    # PNEUMONIA RESULT
+    # PNEUMONIA
     # ========================================================
 
     if pneumonia_result is not None:
@@ -1902,7 +1947,7 @@ if uploaded_file is not None:
     if analyze:
 
         # ====================================================
-        # STEP 1 — BASIC VALIDATION
+        # STEP 1
         # ====================================================
 
         with st.spinner(
@@ -1935,7 +1980,7 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # STEP 2 — MODALITY CLASSIFICATION
+        # STEP 2 — MODALITY
         # ====================================================
 
         with st.spinner(
@@ -1981,9 +2026,23 @@ if uploaded_file is not None:
         )
 
 
-        st.markdown(
-            f"### {modality}"
-        )
+        if modality == "CT":
+
+            st.success(
+                f"### CT"
+            )
+
+        elif modality == "MRI":
+
+            st.info(
+                f"### MRI"
+            )
+
+        else:
+
+            st.success(
+                f"### X-ray"
+            )
 
 
         st.write(
@@ -2007,14 +2066,14 @@ if uploaded_file is not None:
             )
 
 
+            labels = [
+                "CT",
+                "MRI",
+                "X-ray"
+            ]
+
+
             for index in range(3):
-
-                label = (
-                    MODALITY_CLASS_MAP[
-                        index
-                    ]
-                )
-
 
                 probability = (
                     float(
@@ -2025,8 +2084,8 @@ if uploaded_file is not None:
 
 
                 st.write(
-                    f"**{label}: "
-                    f"{probability:.4f}%**"
+                    f"**{labels[index]}: "
+                    f"{probability:.2f}%**"
                 )
 
 
@@ -2042,28 +2101,105 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # TECHNICAL MODALITY INFORMATION
+        # TTA DIAGNOSTICS
         # ====================================================
 
         with st.expander(
-            "Technical modality information"
+            "Modality diagnostic details"
         ):
 
             st.write(
-                f"Predicted class index: "
+                "The classifier was evaluated using "
+                "multiple conservative preprocessing variants."
+            )
+
+
+            st.write(
+                f"Final class index: "
                 f"**{modality_result['index']}**"
             )
 
 
             st.write(
-                "Class mapping: "
-                "**0 = CT, 1 = MRI, 2 = X-ray**"
+                f"Final class: "
+                f"**{modality_result['class']}**"
             )
 
 
             st.write(
-                f"Input tensor shape: "
-                f"**{modality_result['input_shape']}**"
+                f"Final confidence: "
+                f"**{modality_result['confidence'] * 100:.4f}%**"
+            )
+
+
+            st.write(
+                "Vote counts:"
+            )
+
+
+            vote_counts = (
+                modality_result[
+                    "vote_counts"
+                ]
+            )
+
+
+            st.write(
+                f"CT: **{vote_counts['CT']} / 6**"
+            )
+
+
+            st.write(
+                f"MRI: **{vote_counts['MRI']} / 6**"
+            )
+
+
+            st.write(
+                f"X-ray: **{vote_counts['X-ray']} / 6**"
+            )
+
+
+            st.divider()
+
+
+            st.write(
+                "**Individual preprocessing predictions**"
+            )
+
+
+            diagnostic_rows = []
+
+
+            for result in (
+                modality_result[
+                    "variant_results"
+                ]
+            ):
+
+                diagnostic_rows.append(
+                    {
+                        "Preprocessing": result["variant"],
+                        "Prediction": result["class"],
+                        "CT %": round(
+                            result["ct"] * 100,
+                            4
+                        ),
+                        "MRI %": round(
+                            result["mri"] * 100,
+                            4
+                        ),
+                        "X-ray %": round(
+                            result["xray"] * 100,
+                            4
+                        )
+                    }
+                )
+
+
+            st.dataframe(
+                diagnostic_rows,
+                use_container_width=True,
+                hide_index=True
             )
 
 
@@ -2080,53 +2216,12 @@ if uploaded_file is not None:
 
 
             st.write(
-                "Interpolation: **NEAREST**"
-            )
-
-
-            st.write(
                 "Normalization: **pixel / 255.0**"
             )
 
 
-            st.write(
-                f"Input minimum: "
-                f"**{modality_result['input_min']:.6f}**"
-            )
-
-
-            st.write(
-                f"Input maximum: "
-                f"**{modality_result['input_max']:.6f}**"
-            )
-
-
-            st.write(
-                f"Input mean: "
-                f"**{modality_result['input_mean']:.6f}**"
-            )
-
-
-            st.write(
-                f"Input standard deviation: "
-                f"**{modality_result['input_std']:.6f}**"
-            )
-
-
-            st.write(
-                f"Raw model output: "
-                f"**{np.array2string(modality_result['raw_output'], precision=8)}**"
-            )
-
-
-            st.write(
-                f"Modality model file size: "
-                f"**{os.path.getsize(MODALITY_MODEL_PATH):,} bytes**"
-            )
-
-
         # ====================================================
-        # CT / MRI STOP
+        # STEP 3 — CT / MRI STOP
         # ====================================================
 
         if modality in (
@@ -2216,8 +2311,7 @@ if uploaded_file is not None:
                 verifier_result[
                     "xray_probability"
                 ]
-                *
-                100
+                * 100
             )
 
 
@@ -2286,7 +2380,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # STEP 5 — PNEUMONIA DETECTION
+            # STEP 5 — PNEUMONIA
             # =================================================
 
             st.success(
@@ -2418,7 +2512,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # CREATE PDF
+            # PDF
             # =================================================
 
             pdf_bytes = create_pdf_report(
@@ -2441,10 +2535,6 @@ if uploaded_file is not None:
                 pdf_bytes
             )
 
-
-            # =================================================
-            # PDF DOWNLOAD
-            # =================================================
 
             st.divider()
 
