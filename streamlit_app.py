@@ -196,6 +196,11 @@ st.markdown(
         font-size: 17px;
         margin-bottom: 25px;
     }
+    .subtitle {
+        text-align: center;
+        font-size: 12px;
+        margin-bottom: 20px;
+    }
 
     </style>
     """,
@@ -237,12 +242,22 @@ with title_col2:
     st.markdown(
         """
         <div class="main-title">
+           PneuX-ModNet
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+with title_col3:
+    st.markdown(
+        """
+        <div class="main-title">
             PNEUMONIA DETECTION SYSTEM<br>
             FROM X-RAY IMAGES
         </div>
         """,
         unsafe_allow_html=True
     )
+
 
 
 st.markdown(
