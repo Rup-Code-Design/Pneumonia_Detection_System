@@ -1598,7 +1598,7 @@ if uploaded_file is not None:
     st.image(
         image,
         caption="Uploaded Medical Image",
-        use_container_width= "stretch"
+        use_container_width= 600
     )
 
 
@@ -1609,7 +1609,7 @@ if uploaded_file is not None:
     analyze = st.button(
         "Check Your Image By Initiating AI Analysis",
         type="primary",
-        use_container_width=True
+        use_container_width= 600
     )
 
 
