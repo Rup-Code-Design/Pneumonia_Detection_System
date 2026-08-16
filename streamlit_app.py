@@ -112,7 +112,7 @@ PNEUMONIA_MODEL_PATH = os.path.join(
 
 ICON_PATH = os.path.join(
     BASE_DIR,
-    "lung_xray_icon.png"
+    "lung_icon.png"
 )
 
 
