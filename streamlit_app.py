@@ -1507,7 +1507,7 @@ with st.sidebar:
     st.divider()
 
     st.write(
-        "**Pneumonia Classification**"
+        "**Pneumonia Detection**"
     )
 
     st.write(
