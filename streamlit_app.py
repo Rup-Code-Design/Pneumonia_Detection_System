@@ -692,7 +692,7 @@ def validate_image(
 
         return (
             False,
-            "Color image detected."
+            "Color image detected. Please input grayscale medical image."
         )
 
     gray = np.asarray(
