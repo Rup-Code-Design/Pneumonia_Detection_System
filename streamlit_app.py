@@ -1607,7 +1607,7 @@ if uploaded_file is not None:
     # ========================================================
 
     analyze = st.button(
-        "Initiate AI Analysis",
+        "Check Your Image By Initiating AI Analysis",
         type="primary",
         use_container_width=True
     )
