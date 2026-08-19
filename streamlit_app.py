@@ -22,6 +22,10 @@
 #       ↓
 # Normal/Pneumonia
 #       ↓
+# IF PNEUMONIA
+#       ↓
+# Grad-CAM++ Localization
+#       ↓
 # PDF Report
 #
 #
@@ -35,6 +39,12 @@
 #
 # 0 = Normal
 # 1 = Pneumonia
+#
+#
+# IMPORTANT:
+#
+# Grad-CAM++ is NOT a separate trained model.
+# It is calculated from the existing pneumonia CNN.
 # ============================================================
 
 
@@ -138,6 +148,18 @@ PNEUMONIA_IMAGE_SIZE = (
     224,
     224
 )
+
+
+# ============================================================
+# GRAD-CAM++ SETTINGS
+# ============================================================
+
+GRADCAM_IMAGE_SIZE = (
+    224,
+    224
+)
+
+GRADCAM_OVERLAY_ALPHA = 0.45
 
 
 # ============================================================
@@ -913,7 +935,8 @@ def predict_xray_verification(
         confidence = (
             probability
             if is_xray
-            else 1.0 - probability
+            else
+            1.0 - probability
         )
 
         return {
@@ -1043,6 +1066,440 @@ def predict_pneumonia(
 
 
 # ============================================================
+# FIND GRAD-CAM++ TARGET LAYER
+# ============================================================
+
+def find_gradcam_target_layer(
+    model
+):
+    """
+    Automatically finds the deepest suitable 4-D feature
+    layer for Grad-CAM++.
+
+    For an Xception-based pneumonia model this normally
+    corresponds to the deepest convolutional feature map
+    before global pooling/classification.
+    """
+
+    candidate_layers = []
+
+    for layer in reversed(model.layers):
+
+        try:
+
+            output_shape = layer.output.shape
+
+            if output_shape.rank == 4:
+
+                candidate_layers.append(
+                    layer
+                )
+
+        except Exception:
+
+            continue
+
+    if not candidate_layers:
+
+        raise ValueError(
+            "Could not automatically find a suitable "
+            "4-D convolutional feature layer for "
+            "Grad-CAM++."
+        )
+
+    return candidate_layers[0]
+
+
+# ============================================================
+# GRAD-CAM++ HEATMAP
+# ============================================================
+
+def generate_gradcam_plus_plus(
+    image,
+    target_class_index=1
+):
+    """
+    Generates a Grad-CAM++ heatmap from the existing
+    pneumonia classification model.
+
+    target_class_index:
+        0 = Normal
+        1 = Pneumonia
+
+    In the application this function is called only when
+    Pneumonia is detected, therefore the default target
+    class is 1.
+    """
+
+    target_layer = find_gradcam_target_layer(
+        pneumonia_model
+    )
+
+    image_array = preprocess_image(
+        image,
+        PNEUMONIA_IMAGE_SIZE
+    )
+
+    image_tensor = tf.convert_to_tensor(
+        image_array,
+        dtype=tf.float32
+    )
+
+    # --------------------------------------------------------
+    # Nested gradient tapes
+    # --------------------------------------------------------
+
+    with tf.GradientTape(
+        persistent=True
+    ) as tape3:
+
+        tape3.watch(
+            image_tensor
+        )
+
+        with tf.GradientTape(
+            persistent=True
+        ) as tape2:
+
+            tape2.watch(
+                image_tensor
+            )
+
+            with tf.GradientTape() as tape1:
+
+                tape1.watch(
+                    image_tensor
+                )
+
+                # --------------------------------------------
+                # Forward pass
+                # --------------------------------------------
+
+                conv_outputs = target_layer.output
+
+                grad_model = tf.keras.models.Model(
+                    inputs=pneumonia_model.inputs,
+                    outputs=[
+                        target_layer.output,
+                        pneumonia_model.output
+                    ]
+                )
+
+                conv_features, predictions = (
+                    grad_model(
+                        image_tensor,
+                        training=False
+                    )
+                )
+
+                class_score = predictions[
+                    :,
+                    target_class_index
+                ]
+
+            first_derivative = tape1.gradient(
+                class_score,
+                conv_features
+            )
+
+        second_derivative = tape2.gradient(
+            first_derivative,
+            conv_features
+        )
+
+    third_derivative = tape3.gradient(
+        second_derivative,
+        conv_features
+    )
+
+    # --------------------------------------------------------
+    # Safety checks
+    # --------------------------------------------------------
+
+    if first_derivative is None:
+
+        raise RuntimeError(
+            "Grad-CAM++ could not calculate the first "
+            "gradient for the selected feature layer."
+        )
+
+    if second_derivative is None:
+
+        raise RuntimeError(
+            "Grad-CAM++ could not calculate the second "
+            "gradient for the selected feature layer."
+        )
+
+    if third_derivative is None:
+
+        raise RuntimeError(
+            "Grad-CAM++ could not calculate the third "
+            "gradient for the selected feature layer."
+        )
+
+    # --------------------------------------------------------
+    # Remove persistent tapes
+    # --------------------------------------------------------
+
+    del tape1
+    del tape2
+    del tape3
+
+    # --------------------------------------------------------
+    # Grad-CAM++ calculation
+    # --------------------------------------------------------
+
+    conv_features = tf.cast(
+        conv_features,
+        tf.float32
+    )
+
+    first_derivative = tf.cast(
+        first_derivative,
+        tf.float32
+    )
+
+    second_derivative = tf.cast(
+        second_derivative,
+        tf.float32
+    )
+
+    third_derivative = tf.cast(
+        third_derivative,
+        tf.float32
+    )
+
+    positive_second = tf.maximum(
+        second_derivative,
+        0.0
+    )
+
+    denominator = (
+        2.0 * positive_second
+        +
+        conv_features
+        * third_derivative
+    )
+
+    epsilon = tf.constant(
+        1e-8,
+        dtype=tf.float32
+    )
+
+    alpha = (
+        positive_second
+        /
+        (
+            denominator
+            + epsilon
+        )
+    )
+
+    positive_gradients = tf.maximum(
+        first_derivative,
+        0.0
+    )
+
+    weights = tf.reduce_sum(
+        alpha * positive_gradients,
+        axis=(1, 2)
+    )
+
+    weighted_features = (
+        conv_features
+        *
+        weights[:, tf.newaxis, tf.newaxis, :]
+    )
+
+    heatmap = tf.reduce_sum(
+        weighted_features,
+        axis=-1
+    )
+
+    heatmap = tf.maximum(
+        heatmap,
+        0.0
+    )
+
+    heatmap = heatmap[0]
+
+    heatmap_max = tf.reduce_max(
+        heatmap
+    )
+
+    heatmap = tf.where(
+        heatmap_max > 0,
+        heatmap / (
+            heatmap_max + epsilon
+        ),
+        tf.zeros_like(
+            heatmap
+        )
+    )
+
+    heatmap = heatmap.numpy()
+
+    heatmap = np.nan_to_num(
+        heatmap,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
+    heatmap = np.clip(
+        heatmap,
+        0.0,
+        1.0
+    )
+
+    return (
+        heatmap,
+        target_layer.name
+    )
+
+
+# ============================================================
+# CREATE HEATMAP COLOR IMAGE
+# ============================================================
+
+def create_heatmap_image(
+    heatmap,
+    target_size
+):
+    """
+    Creates a JET-style heatmap using NumPy/PIL only.
+    No OpenCV or matplotlib dependency is required.
+    """
+
+    heatmap_uint8 = (
+        heatmap * 255.0
+    ).astype(
+        np.uint8
+    )
+
+    heatmap_image = Image.fromarray(
+        heatmap_uint8,
+        mode="L"
+    )
+
+    heatmap_image = heatmap_image.resize(
+        target_size,
+        Image.Resampling.BICUBIC
+    )
+
+    h = np.asarray(
+        heatmap_image,
+        dtype=np.float32
+    ) / 255.0
+
+    # --------------------------------------------------------
+    # JET-style color mapping
+    # --------------------------------------------------------
+
+    red = np.clip(
+        1.5 * h - 0.5,
+        0.0,
+        1.0
+    )
+
+    green = np.clip(
+        1.5 - np.abs(
+            4.0 * h - 2.0
+        ),
+        0.0,
+        1.0
+    )
+
+    blue = np.clip(
+        1.5 - 1.5 * h,
+        0.0,
+        1.0
+    )
+
+    rgb = np.stack(
+        [
+            red,
+            green,
+            blue
+        ],
+        axis=-1
+    )
+
+    rgb = (
+        rgb * 255.0
+    ).astype(
+        np.uint8
+    )
+
+    return Image.fromarray(
+        rgb,
+        mode="RGB"
+    )
+
+
+# ============================================================
+# CREATE GRAD-CAM++ OVERLAY
+# ============================================================
+
+def create_gradcam_overlay(
+    image,
+    heatmap
+):
+    """
+    Creates the final localization image by overlaying
+    Grad-CAM++ activation on the original X-ray.
+    """
+
+    original = ImageOps.exif_transpose(
+        image
+    ).convert(
+        "RGB"
+    )
+
+    original = original.resize(
+        GRADCAM_IMAGE_SIZE,
+        Image.Resampling.LANCZOS
+    )
+
+    heatmap_image = create_heatmap_image(
+        heatmap,
+        GRADCAM_IMAGE_SIZE
+    )
+
+    overlay = Image.blend(
+        original,
+        heatmap_image,
+        GRADCAM_OVERLAY_ALPHA
+    )
+
+    return (
+        original,
+        heatmap_image,
+        overlay
+    )
+
+
+# ============================================================
+# CONVERT PIL IMAGE TO PNG BYTES
+# ============================================================
+
+def pil_image_to_png_bytes(
+    image
+):
+
+    buffer = io.BytesIO()
+
+    image.save(
+        buffer,
+        format="PNG"
+    )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+
+# ============================================================
 # PDF REPORT
 # ============================================================
 
@@ -1050,7 +1507,9 @@ def create_pdf_report(
     image,
     modality_result,
     verifier_result,
-    pneumonia_result=None
+    pneumonia_result=None,
+    gradcam_overlay=None,
+    gradcam_layer_name=None
 ):
 
     buffer = io.BytesIO()
@@ -1102,6 +1561,10 @@ def create_pdf_report(
 
     story = []
 
+    # ========================================================
+    # TITLE
+    # ========================================================
+
     story.append(
         Paragraph(
             "PneuX-ModNet<br/>"
@@ -1134,6 +1597,10 @@ def create_pdf_report(
             10
         )
     )
+
+    # ========================================================
+    # ORIGINAL IMAGE
+    # ========================================================
 
     image_buffer = io.BytesIO()
 
@@ -1354,43 +1821,75 @@ def create_pdf_report(
             * 100
         )
 
-        normal_probability = (
-            pneumonia_result[
-                "normal_probability"
+        # ----------------------------------------------------
+        # PNEUMONIA RESULT
+        #
+        # Do NOT show Normal probability when Pneumonia
+        # is detected.
+        # ----------------------------------------------------
+
+        if diagnosis == "Pneumonia":
+
+            pneumonia_probability = (
+                pneumonia_result[
+                    "pneumonia_probability"
+                ]
+                * 100
+            )
+
+            pneumonia_data = [
+                ["Parameter", "Result"],
+
+                [
+                    "Final Diagnosis",
+                    diagnosis
+                ],
+
+                [
+                    "Diagnosis Confidence",
+                    f"{confidence:.2f}%"
+                ],
+
+                [
+                    "Pneumonia Probability",
+                    f"{pneumonia_probability:.2f}%"
+                ]
             ]
-            * 100
-        )
 
-        pneumonia_probability = (
-            pneumonia_result[
-                "pneumonia_probability"
+        # ----------------------------------------------------
+        # NORMAL RESULT
+        #
+        # Do NOT show Pneumonia probability when Normal
+        # is detected.
+        # ----------------------------------------------------
+
+        else:
+
+            normal_probability = (
+                pneumonia_result[
+                    "normal_probability"
+                ]
+                * 100
+            )
+
+            pneumonia_data = [
+                ["Parameter", "Result"],
+
+                [
+                    "Final Diagnosis",
+                    diagnosis
+                ],
+
+                [
+                    "Diagnosis Confidence",
+                    f"{confidence:.2f}%"
+                ],
+
+                [
+                    "Normal Probability",
+                    f"{normal_probability:.2f}%"
+                ]
             ]
-            * 100
-        )
-
-        pneumonia_data = [
-            ["Parameter", "Result"],
-
-            [
-                "Final Diagnosis",
-                diagnosis
-            ],
-
-            [
-                "Diagnosis Confidence",
-                f"{confidence:.2f}%"
-            ],
-
-            [
-                "Normal Probability",
-                f"{normal_probability:.2f}%"
-            ],
-
-            [
-                "Pneumonia Probability",
-                f"{pneumonia_probability:.2f}%"
-            ]
-        ]
 
         story.append(
             Paragraph(
@@ -1430,6 +1929,13 @@ def create_pdf_report(
                         (0, 0),
                         (-1, 0),
                         "Helvetica-Bold"
+                    ),
+
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE"
                     )
                 ]
             )
@@ -1438,6 +1944,104 @@ def create_pdf_report(
         story.append(
             pneumonia_table
         )
+
+        story.append(
+            Spacer(
+                1,
+                12
+            )
+        )
+
+        # ====================================================
+        # GRAD-CAM++ PDF SECTION
+        # ====================================================
+
+        if (
+            diagnosis == "Pneumonia"
+            and
+            gradcam_overlay is not None
+        ):
+
+            story.append(
+                Paragraph(
+                    "4. Pneumonia Localization "
+                    "(Grad-CAM++)",
+                    heading_style
+                )
+            )
+
+            story.append(
+                Paragraph(
+                    "The highlighted region represents "
+                    "the areas of the chest X-ray that "
+                    "contributed most strongly to the "
+                    "Pneumonia prediction.",
+                    normal_style
+                )
+            )
+
+            story.append(
+                Spacer(
+                    1,
+                    8
+                )
+            )
+
+            gradcam_buffer = io.BytesIO()
+
+            gradcam_overlay.save(
+                gradcam_buffer,
+                format="PNG"
+            )
+
+            gradcam_buffer.seek(0)
+
+            gradcam_report_image = RLImage(
+                gradcam_buffer,
+                width=140 * mm,
+                height=140 * mm
+            )
+
+            story.append(
+                gradcam_report_image
+            )
+
+            story.append(
+                Spacer(
+                    1,
+                    8
+                )
+            )
+
+            if gradcam_layer_name:
+
+                story.append(
+                    Paragraph(
+                        f"<b>Grad-CAM++ Feature Layer:</b> "
+                        f"{gradcam_layer_name}",
+                        normal_style
+                    )
+                )
+
+            story.append(
+                Spacer(
+                    1,
+                    8
+                )
+            )
+
+            story.append(
+                Paragraph(
+                    "<b>Localization Note:</b> "
+                    "Grad-CAM++ is an explainability "
+                    "technique and highlights image "
+                    "regions associated with the model's "
+                    "prediction. It is not a pixel-level "
+                    "clinical segmentation or a confirmed "
+                    "boundary of disease.",
+                    normal_style
+                )
+            )
 
     # ========================================================
     # DISCLAIMER
@@ -1628,11 +2232,7 @@ if uploaded_file is not None:
         # ====================================================
         # MODALITY RESULT
         #
-        # WEB INTERFACE:
-        # ONLY THE DETECTED CLASS IS SHOWN.
-        #
-        # Probability information remains available
-        # inside the PDF report.
+        # WEB INTERFACE SHOWS ONLY THE DETECTED CLASS.
         # ====================================================
 
         st.markdown(
@@ -1645,17 +2245,8 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # REMOVED FROM WEB INTERFACE:
-        #
-        # View modality classification probabilities
-        #
-        # Technical classification information
-        #
-        # These details are intentionally NOT displayed
-        # on the webpage.
-        #
-        # They remain available in the PDF report through
-        # the modality confidence information.
+        # NO MODALITY PROBABILITIES ON WEB INTERFACE
+        # NO TECHNICAL INFORMATION ON WEB INTERFACE
         # ====================================================
 
 
@@ -1683,13 +2274,16 @@ if uploaded_file is not None:
                 "modality": modality,
                 "modality_confidence": modality_confidence,
                 "verifier": None,
-                "pneumonia": None
+                "pneumonia": None,
+                "gradcam": None
             }
 
             st.session_state.pdf_report = (
                 create_pdf_report(
                     image,
                     modality_result,
+                    None,
+                    None,
                     None,
                     None
                 )
@@ -1758,7 +2352,8 @@ if uploaded_file is not None:
                     "modality": modality,
                     "modality_confidence": modality_confidence,
                     "verifier": verifier_result,
-                    "pneumonia": None
+                    "pneumonia": None,
+                    "gradcam": None
                 }
 
                 st.session_state.pdf_report = (
@@ -1766,6 +2361,8 @@ if uploaded_file is not None:
                         image,
                         modality_result,
                         verifier_result,
+                        None,
+                        None,
                         None
                     )
                 )
@@ -1823,10 +2420,7 @@ if uploaded_file is not None:
             # =================================================
             # FINAL RESULT
             #
-            # WEB INTERFACE:
-            # ONLY "Normal" OR "Pneumonia" IS SHOWN.
-            #
-            # Probability percentages remain in PDF.
+            # WEB INTERFACE SHOWS ONLY THE CLASS.
             # =================================================
 
             if diagnosis == "Pneumonia":
@@ -1843,15 +2437,79 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # REMOVED FROM WEB INTERFACE:
+            # STEP 6 — GRAD-CAM++ LOCALIZATION
             #
-            # View pneumonia classification probabilities
-            #
-            # Normal/Pneumonia probability bars are NOT
-            # displayed here.
-            #
-            # They remain in the downloaded PDF report.
+            # ONLY RUN WHEN PNEUMONIA IS DETECTED.
             # =================================================
+
+            gradcam_overlay = None
+
+            gradcam_layer_name = None
+
+            if diagnosis == "Pneumonia":
+
+                st.markdown(
+                    "## Pneumonia Localization"
+                )
+
+                with st.spinner(
+                    "Generating Grad-CAM++ localization..."
+                ):
+
+                    try:
+
+                        heatmap, gradcam_layer_name = (
+                            generate_gradcam_plus_plus(
+                                image,
+                                target_class_index=1
+                            )
+                        )
+
+                        (
+                            original_gradcam_image,
+                            heatmap_image,
+                            gradcam_overlay
+                        ) = create_gradcam_overlay(
+                            image,
+                            heatmap
+                        )
+
+                    except Exception as e:
+
+                        st.error(
+                            "Grad-CAM++ localization could not "
+                            "be generated."
+                        )
+
+                        st.exception(e)
+
+                        gradcam_overlay = None
+
+                # ------------------------------------------------
+                # DISPLAY GRAD-CAM++ RESULT
+                # ------------------------------------------------
+
+                if gradcam_overlay is not None:
+
+                    st.success(
+                        "Pneumonia localization generated "
+                        "using Grad-CAM++."
+                    )
+
+                    st.image(
+                        gradcam_overlay,
+                        caption=(
+                            "Grad-CAM++ Pneumonia "
+                            "Localization"
+                        ),
+                        use_container_width=True
+                    )
+
+                    st.info(
+                        "Highlighted regions indicate areas "
+                        "that contributed strongly to the "
+                        "Pneumonia prediction."
+                    )
 
 
             # =================================================
@@ -1862,14 +2520,18 @@ if uploaded_file is not None:
                 image,
                 modality_result,
                 verifier_result,
-                pneumonia_result
+                pneumonia_result,
+                gradcam_overlay,
+                gradcam_layer_name
             )
 
             st.session_state.analysis_result = {
                 "modality": modality,
                 "modality_confidence": modality_confidence,
                 "verifier": verifier_result,
-                "pneumonia": pneumonia_result
+                "pneumonia": pneumonia_result,
+                "gradcam": gradcam_overlay,
+                "gradcam_layer": gradcam_layer_name
             }
 
             st.session_state.pdf_report = (
