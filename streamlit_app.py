@@ -631,7 +631,7 @@ def validate_image(image):
 
         return (
             False,
-            "Color image detected. Please input grayscale medical image."
+            "Color image detected. Please input a chest x-ray image."
         )
 
     gray = np.asarray(
