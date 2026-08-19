@@ -1,4 +1,339 @@
-#==============================
+# ============================================================
+# streamlit_app.py
+#
+# PneuX-ModNet
+#
+# PIPELINE
+#
+# Uploaded Image
+#       ↓
+# Basic Validation
+#       ↓
+# 3-Class Modality Classifier
+#       ↓
+# ┌──────────────┬──────────────┬──────────────┐
+# │ CT           │ MRI          │ X-ray        │
+# │ STOP         │ STOP         │ CONTINUE     │
+# └──────────────┴──────────────┴──────────────┘
+#       ↓
+# X-ray Verifier
+#       ↓
+# Pneumonia Model
+#       ↓
+# Normal/Pneumonia
+#       ↓
+# IF PNEUMONIA
+#       ↓
+# Grad-CAM++
+#       ↓
+# PDF Report
+#
+# MODALITY:
+# 0 = CT
+# 1 = MRI
+# 2 = X-ray
+#
+# PNEUMONIA:
+# 0 = Normal
+# 1 = Pneumonia
+#
+# ============================================================
+
+import os
+import io
+import re
+from datetime import datetime
+
+import numpy as np
+import streamlit as st
+import tensorflow as tf
+
+from PIL import Image, ImageOps, ImageFilter
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import (
+    getSampleStyleSheet,
+    ParagraphStyle
+)
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    Image as RLImage
+)
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
+
+st.set_page_config(
+    page_title="PneuX-ModNet",
+    page_icon="🫁",
+    layout="wide"
+)
+
+
+# ============================================================
+# BASE DIRECTORY
+# ============================================================
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+
+# ============================================================
+# MODEL PATHS
+# ============================================================
+
+MODALITY_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "modality_classifier.keras"
+)
+
+XRAY_VERIFIER_PATH = os.path.join(
+    BASE_DIR,
+    "xray_verifier.keras"
+)
+
+PNEUMONIA_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "best_xception_pneumonia_model.keras"
+)
+
+
+# ============================================================
+# ICON
+# ============================================================
+
+ICON_PATH = os.path.join(
+    BASE_DIR,
+    "lung_xray_icon.png"
+)
+
+
+# ============================================================
+# IMAGE SETTINGS
+# ============================================================
+
+MODALITY_IMAGE_SIZE = (224, 224)
+
+XRAY_VERIFIER_IMAGE_SIZE = (224, 224)
+
+PNEUMONIA_IMAGE_SIZE = (224, 224)
+
+GRADCAM_IMAGE_SIZE = (224, 224)
+
+
+# ============================================================
+# GRAD-CAM++ SETTINGS
+# ============================================================
+
+GRADCAM_OVERLAY_ALPHA = 0.48
+
+GRADCAM_LOW_PERCENTILE = 60.0
+
+GRADCAM_HIGH_PERCENTILE = 99.0
+
+GRADCAM_MIN_ACTIVATION = 0.18
+
+GRADCAM_GAMMA = 0.80
+
+GRADCAM_BLUR_RADIUS = 1.15
+
+GRADCAM_EPSILON = 1e-7
+
+
+# ============================================================
+# THRESHOLDS
+# ============================================================
+
+COLOR_TOLERANCE = 8.0
+
+XRAY_VERIFIER_THRESHOLD = 0.50
+
+
+# ============================================================
+# MODALITY CLASS MAP
+# ============================================================
+
+MODALITY_CLASS_MAP = {
+    0: "CT",
+    1: "MRI",
+    2: "X-ray"
+}
+
+MODALITY_XRAY_CLASS_INDEX = 2
+
+
+# ============================================================
+# PNEUMONIA CLASS MAP
+# ============================================================
+
+PNEUMONIA_CLASS_MAP = {
+    0: "Normal",
+    1: "Pneumonia"
+}
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "analysis_result" not in st.session_state:
+    st.session_state.analysis_result = None
+
+if "pdf_report" not in st.session_state:
+    st.session_state.pdf_report = None
+
+
+# ============================================================
+# CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+
+    .main-title {
+        text-align: center;
+        font-size: 38px;
+        font-weight: 700;
+        line-height: 1.15;
+        margin-top: 5px;
+        margin-bottom: 8px;
+    }
+
+    .subtitle {
+        text-align: center;
+        font-size: 17px;
+        line-height: 1.5;
+        margin-top: 4px;
+        margin-bottom: 25px;
+    }
+
+    .section-title {
+        text-align: center;
+        font-size: 26px;
+        font-weight: 650;
+        margin-top: 15px;
+        margin-bottom: 12px;
+    }
+
+    .result-box {
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #cccccc;
+        margin-top: 15px;
+        margin-bottom: 15px;
+    }
+
+    .modality-result {
+        background-color: #eef4ff;
+    }
+
+    .normal-result {
+        background-color: #eaf7ea;
+    }
+
+    .pneumonia-result {
+        background-color: #fdeaea;
+    }
+
+    .info-text {
+        text-align: center;
+        font-size: 15px;
+        line-height: 1.5;
+    }
+
+    .brand-name {
+        text-align: center;
+        font-size: 16px;
+        font-weight: 600;
+        margin-top: 4px;
+        margin-bottom: 2px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+title_col1, title_col2 = st.columns(
+    [0.75, 7.25],
+    vertical_alignment="center"
+)
+
+with title_col1:
+
+    if os.path.isfile(ICON_PATH):
+
+        st.image(
+            ICON_PATH,
+            width=90
+        )
+
+    else:
+
+        st.markdown(
+            """
+            <div style="
+                font-size:70px;
+                text-align:center;
+                line-height:1;
+            ">
+                🫁
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+with title_col2:
+
+    st.markdown(
+        """
+        <div class="main-title">
+            PneuX-ModNet
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="brand-name">
+            AI-Based Medical Image Modality Classification
+            and Pneumonia Detection System
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+st.markdown(
+    """
+    <div class="subtitle">
+        Automated classification of CT, MRI, and X-ray images,
+        followed by X-ray verification and pneumonia detection.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
 # MODEL FILE VALIDATION
 # ============================================================
 
