@@ -1464,68 +1464,8 @@ def create_pdf_report(
 
 
 # ============================================================
-# SIDEBAR
+# UPLOAD SECTION
 # ============================================================
-
-with st.sidebar:
-
-    st.header(
-        "PneuX-ModNet"
-    )
-
-    st.write(
-        """
-        **Analysis Pipeline**
-
-        1. Upload medical image
-        2. Basic image validation
-        3. CT / MRI / X-ray classification
-        4. X-ray verification
-        5. Pneumonia detection
-        6. PDF report generation
-        """
-    )
-
-    st.divider()
-
-    st.write(
-        "**Medical Image Modalities**"
-    )
-
-    st.write(
-        "0 — CT"
-    )
-
-    st.write(
-        "1 — MRI"
-    )
-
-    st.write(
-        "2 — X-ray"
-    )
-
-    st.divider()
-
-    st.write(
-        "**Pneumonia Detection**"
-    )
-
-    st.write(
-        "0 — Normal"
-    )
-
-    st.write(
-        "1 — Pneumonia"
-    )
-
-    st.divider()
-
-    st.caption(
-        "Research prototype. "
-        "Not intended for clinical diagnosis."
-    )
-
-
 # ============================================================
 # UPLOAD SECTION
 # ============================================================
@@ -1694,11 +1634,6 @@ if uploaded_file is not None:
             f"### {modality}"
         )
 
-        st.write(
-            f"Classification confidence: "
-            f"**{modality_confidence:.2f}%**"
-        )
-
 
         # ====================================================
         # MODALITY PROBABILITIES
@@ -1857,29 +1792,6 @@ if uploaded_file is not None:
 
                     st.stop()
 
-            xray_probability = (
-                verifier_result[
-                    "xray_probability"
-                ]
-                *
-                100
-            )
-
-            st.write(
-                f"X-ray probability: "
-                f"**{xray_probability:.2f}%**"
-            )
-
-            st.progress(
-                min(
-                    max(
-                        xray_probability / 100.0,
-                        0.0
-                    ),
-                    1.0
-                )
-            )
-
 
             # =================================================
             # NOT X-RAY
@@ -1983,11 +1895,6 @@ if uploaded_file is not None:
                 st.success(
                     f"### Final Result: {diagnosis}"
                 )
-
-            st.write(
-                f"Diagnosis confidence: "
-                f"**{diagnosis_confidence:.2f}%**"
-            )
 
 
             # =================================================
