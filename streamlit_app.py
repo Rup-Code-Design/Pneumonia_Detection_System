@@ -2538,18 +2538,18 @@ def create_pdf_report(
                 )
             )
 
-            story.append(
-                Paragraph(
-                    "<b>Localization Note:</b> "
-                    "Grad-CAM++ is an explainability "
-                    "technique that highlights image "
-                    "regions associated with the model "
-                    "prediction. It is not a pixel-level "
-                    "clinical segmentation or a confirmed "
-                    "boundary of disease.",
-                    normal_style
-                )
-            )
+            # story.append(
+            #     Paragraph(
+            #         "<b>Localization Note:</b> "
+            #         "Grad-CAM++ is an explainability "
+            #         "technique that highlights image "
+            #         "regions associated with the model "
+            #         "prediction. It is not a pixel-level "
+            #         "clinical segmentation or a confirmed "
+            #         "boundary of disease.",
+            #         normal_style
+            #     )
+            # )
 
     # --------------------------------------------------------
     # DISCLAIMER
@@ -3025,9 +3025,7 @@ if uploaded_file is not None:
                     st.info(
                         "Red and yellow regions indicate "
                         "the strongest areas associated with "
-                        "the Pneumonia prediction. The "
-                        "visualization is an explainability "
-                        "map, not a clinical segmentation."
+                        "the Pneumonia prediction."
                     )
 
             # =================================================
