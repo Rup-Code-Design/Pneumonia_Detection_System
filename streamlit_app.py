@@ -2521,22 +2521,22 @@ def create_pdf_report(
                 )
             )
 
-            if gradcam_layer_name:
+            # if gradcam_layer_name:
 
-                story.append(
-                    Paragraph(
-                        f"<b>Grad-CAM++ Feature Layer:</b> "
-                        f"{gradcam_layer_name}",
-                        normal_style
-                    )
-                )
+            #     story.append(
+            #         Paragraph(
+            #             f"<b>Grad-CAM++ Feature Layer:</b> "
+            #             f"{gradcam_layer_name}",
+            #             normal_style
+            #         )
+            #     )
 
-            story.append(
-                Spacer(
-                    1,
-                    8
-                )
-            )
+            # story.append(
+            #     Spacer(
+            #         1,
+            #         8
+            #     )
+            # )
 
             # story.append(
             #     Paragraph(
