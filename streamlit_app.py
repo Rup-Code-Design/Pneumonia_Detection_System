@@ -185,8 +185,6 @@ if "pdf_report" not in st.session_state:
 
 # ============================================================
 # HTML / CSS
-#
-# ONLY PRESENTATION TEXT HAS BEEN UPDATED
 # ============================================================
 
 st.markdown(
@@ -304,13 +302,6 @@ st.markdown(
 
 # ============================================================
 # PAGE HEADER
-#
-# FIX:
-# - Uses exactly two columns
-# - Uses lung_icon.png
-# - Icon is closer to the title
-# - PneuX-ModNet is the main application name
-# - Descriptive text is below the title
 # ============================================================
 
 title_col1, title_col2 = st.columns(
@@ -922,8 +913,7 @@ def predict_xray_verification(
         confidence = (
             probability
             if is_xray
-            else
-            1.0 - probability
+            else 1.0 - probability
         )
 
         return {
@@ -1171,6 +1161,10 @@ def create_pdf_report(
         )
     )
 
+    # ========================================================
+    # MODALITY REPORT
+    # ========================================================
+
     modality = modality_result["class"]
 
     modality_confidence = (
@@ -1267,6 +1261,10 @@ def create_pdf_report(
         )
     )
 
+    # ========================================================
+    # X-RAY VERIFICATION REPORT
+    # ========================================================
+
     if verifier_result is not None:
 
         xray_probability = (
@@ -1340,6 +1338,10 @@ def create_pdf_report(
         story.append(
             verifier_table
         )
+
+    # ========================================================
+    # PNEUMONIA REPORT
+    # ========================================================
 
     if pneumonia_result is not None:
 
@@ -1437,6 +1439,10 @@ def create_pdf_report(
             pneumonia_table
         )
 
+    # ========================================================
+    # DISCLAIMER
+    # ========================================================
+
     story.append(
         Spacer(
             1,
@@ -1463,9 +1469,6 @@ def create_pdf_report(
     return buffer.getvalue()
 
 
-# ============================================================
-# UPLOAD SECTION
-# ============================================================
 # ============================================================
 # UPLOAD SECTION
 # ============================================================
@@ -1538,7 +1541,7 @@ if uploaded_file is not None:
     st.image(
         image,
         caption="Uploaded Medical Image",
-        use_container_width= True
+        use_container_width=True
     )
 
 
@@ -1549,7 +1552,7 @@ if uploaded_file is not None:
     analyze = st.button(
         "Check Your Image By Initiating AI Analysis",
         type="primary",
-        use_container_width= True
+        use_container_width=True
     )
 
 
@@ -1624,6 +1627,12 @@ if uploaded_file is not None:
 
         # ====================================================
         # MODALITY RESULT
+        #
+        # WEB INTERFACE:
+        # ONLY THE DETECTED CLASS IS SHOWN.
+        #
+        # Probability information remains available
+        # inside the PDF report.
         # ====================================================
 
         st.markdown(
@@ -1636,81 +1645,18 @@ if uploaded_file is not None:
 
 
         # ====================================================
-        # MODALITY PROBABILITIES
+        # REMOVED FROM WEB INTERFACE:
+        #
+        # View modality classification probabilities
+        #
+        # Technical classification information
+        #
+        # These details are intentionally NOT displayed
+        # on the webpage.
+        #
+        # They remain available in the PDF report through
+        # the modality confidence information.
         # ====================================================
-
-        with st.expander(
-            "View modality classification probabilities"
-        ):
-
-            probabilities = (
-                modality_result[
-                    "probabilities"
-                ]
-            )
-
-            for index in range(3):
-
-                label = (
-                    MODALITY_CLASS_MAP[
-                        index
-                    ]
-                )
-
-                probability = (
-                    float(
-                        probabilities[index]
-                    )
-                    * 100
-                )
-
-                st.write(
-                    f"**{label}: "
-                    f"{probability:.2f}%**"
-                )
-
-                st.progress(
-                    min(
-                        max(
-                            probability / 100.0,
-                            0.0
-                        ),
-                        1.0
-                    )
-                )
-
-
-        # ====================================================
-        # TECHNICAL INFORMATION
-        # ====================================================
-
-        with st.expander(
-            "Technical classification information"
-        ):
-
-            st.write(
-                f"Predicted class index: "
-                f"**{modality_result['index']}**"
-            )
-
-            st.write(
-                "Class mapping: "
-                "**0 = CT, 1 = MRI, 2 = X-ray**"
-            )
-
-            st.write(
-                f"Input size: "
-                f"**{MODALITY_IMAGE_SIZE[0]} × "
-                f"{MODALITY_IMAGE_SIZE[1]}**"
-            )
-
-            st.write(
-                "Input channels: **RGB (3 channels)**"
-            )
-
-            st.write(
-                "Normalization: **pixel / 255.0**"
-            )
 
 
         # ====================================================
@@ -1873,15 +1819,14 @@ if uploaded_file is not None:
                 pneumonia_result["class"]
             )
 
-            diagnosis_confidence = (
-                pneumonia_result["confidence"]
-                *
-                100
-            )
-
 
             # =================================================
             # FINAL RESULT
+            #
+            # WEB INTERFACE:
+            # ONLY "Normal" OR "Pneumonia" IS SHOWN.
+            #
+            # Probability percentages remain in PDF.
             # =================================================
 
             if diagnosis == "Pneumonia":
@@ -1898,58 +1843,15 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # PNEUMONIA PROBABILITIES
+            # REMOVED FROM WEB INTERFACE:
+            #
+            # View pneumonia classification probabilities
+            #
+            # Normal/Pneumonia probability bars are NOT
+            # displayed here.
+            #
+            # They remain in the downloaded PDF report.
             # =================================================
-
-            with st.expander(
-                "View pneumonia classification probabilities"
-            ):
-
-                normal_probability = (
-                    pneumonia_result[
-                        "normal_probability"
-                    ]
-                    *
-                    100
-                )
-
-                pneumonia_probability = (
-                    pneumonia_result[
-                        "pneumonia_probability"
-                    ]
-                    *
-                    100
-                )
-
-                st.write(
-                    f"**Normal: "
-                    f"{normal_probability:.2f}%**"
-                )
-
-                st.progress(
-                    min(
-                        max(
-                            normal_probability / 100,
-                            0
-                        ),
-                        1
-                    )
-                )
-
-                st.write(
-                    f"**Pneumonia: "
-                    f"{pneumonia_probability:.2f}%**"
-                )
-
-                st.progress(
-                    min(
-                        max(
-                            pneumonia_probability / 100,
-                            0
-                        ),
-                        1
-                    )
-                )
 
 
             # =================================================
