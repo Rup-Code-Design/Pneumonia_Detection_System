@@ -60,7 +60,7 @@ import numpy as np
 import streamlit as st
 import tensorflow as tf
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -159,7 +159,17 @@ GRADCAM_IMAGE_SIZE = (
     224
 )
 
-GRADCAM_OVERLAY_ALPHA = 0.45
+GRADCAM_OVERLAY_ALPHA = 0.55
+
+# Stronger visualization settings.
+GRADCAM_LOW_PERCENTILE = 55.0
+GRADCAM_HIGH_PERCENTILE = 99.0
+
+# Weak activations below this relative level are suppressed.
+GRADCAM_ACTIVATION_THRESHOLD = 0.18
+
+# Additional smoothing.
+GRADCAM_SMOOTHING_RADIUS = 1.2
 
 
 # ============================================================
@@ -580,9 +590,7 @@ def check_color_image(
     )
 
     red = rgb[:, :, 0]
-
     green = rgb[:, :, 1]
-
     blue = rgb[:, :, 2]
 
     rg_difference = np.mean(
@@ -1023,167 +1031,138 @@ def predict_pneumonia(
 
 # ============================================================
 # ============================================================
-# GRAD-CAM++ IMPLEMENTATION
+# GRAD-CAM++ SECTION
 # ============================================================
-#
-# UPDATED SECTION
-#
-# This implementation specifically handles:
-#
-#   1. Flat CNN / Functional models
-#   2. Nested Xception Functional models
-#   3. SeparableConv2D layers
-#   4. DepthwiseConv2D layers
-#
-# The important difference from the previous implementation
-# is that the nested Xception feature tensor and the
-# classification output are calculated in the SAME
-# differentiable forward pass.
-#
-# The previous implementation calculated:
-#
-#       conv_features = nested model
-#
-# and separately:
-#
-#       predictions = pneumonia_model(image)
-#
-# Those are two independent graph paths. Therefore:
-#
-#       gradient(prediction, conv_features)
-#
-# can become None.
-#
-# This version reconstructs the classification head after
-# the nested backbone whenever possible.
 # ============================================================
 
 
 # ============================================================
-# CHECK 4-D FEATURE OUTPUT
+# CHECK 4-D FEATURE LAYER
 # ============================================================
 
-def _get_tensor_rank(
-    tensor
-):
-
-    try:
-
-        if tensor is None:
-            return None
-
-        shape = tensor.shape
-
-        if shape is None:
-            return None
-
-        if hasattr(
-            shape,
-            "rank"
-        ):
-
-            return shape.rank
-
-        try:
-
-            return len(
-                shape
-            )
-
-        except Exception:
-
-            return None
-
-    except Exception:
-
-        return None
-
-
-def _is_4d_feature_layer(
-    layer
-):
+def _is_4d_feature_layer(layer):
 
     try:
 
         output = layer.output
 
-    except Exception:
+        if isinstance(
+            output,
+            (list, tuple)
+        ):
 
-        return False
+            for item in output:
 
-    # --------------------------------------------------------
-    # Multiple outputs
-    # --------------------------------------------------------
+                try:
 
-    if isinstance(
-        output,
-        (list, tuple)
-    ):
+                    shape = item.shape
 
-        for item in output:
+                    if (
+                        shape is not None
+                        and
+                        shape.rank == 4
+                    ):
 
-            if (
-                _get_tensor_rank(
-                    item
-                )
-                == 4
-            ):
+                        return True
 
-                return True
+                except Exception:
 
-        return False
+                    continue
 
-    # --------------------------------------------------------
-    # Normal tensor
-    # --------------------------------------------------------
+            return False
 
-    rank = _get_tensor_rank(
-        output
-    )
+        shape = output.shape
 
-    if rank != 4:
+        if shape is None:
 
-        return False
+            return False
 
-    try:
+        if shape.rank == 4:
 
-        channels = output.shape[-1]
+            return True
 
-        if channels is None:
+        try:
+
+            shape_list = shape.as_list()
+
+            return (
+                len(shape_list) == 4
+                and
+                shape_list[-1] is not None
+            )
+
+        except Exception:
 
             return False
 
     except Exception:
 
-        pass
-
-    return True
+        return False
 
 
 # ============================================================
-# CHECK CONVOLUTIONAL LAYER
+# FIND NESTED XCEPTION BACKBONE
 # ============================================================
 
-def _is_convolutional_layer(
-    layer
+def _find_xception_backbone(
+    model
 ):
 
-    class_name = (
-        layer.__class__.__name__
-        .lower()
-    )
+    # Direct search.
+    for layer in model.layers:
 
-    return (
-        "conv2d" in class_name
-        or
-        "separableconv" in class_name
-        or
-        "depthwiseconv" in class_name
-    )
+        class_name = (
+            layer.__class__.__name__
+            .lower()
+        )
+
+        layer_name = (
+            getattr(
+                layer,
+                "name",
+                ""
+            )
+            .lower()
+        )
+
+        combined_name = (
+            class_name
+            + " "
+            + layer_name
+        )
+
+        if (
+            "xception" in combined_name
+            and
+            isinstance(
+                layer,
+                tf.keras.Model
+            )
+        ):
+
+            return layer
+
+    # Recursive search.
+    for layer in model.layers:
+
+        if isinstance(
+            layer,
+            tf.keras.Model
+        ):
+
+            found = _find_xception_backbone(
+                layer
+            )
+
+            if found is not None:
+
+                return found
+
+    return None
 
 
 # ============================================================
-# FIND DEEPEST CONVOLUTIONAL LAYER
+# FIND DEEPEST CONVOLUTIONAL FEATURE
 # ============================================================
 
 def _find_deepest_conv_layer(
@@ -1194,23 +1173,8 @@ def _find_deepest_conv_layer(
 
     fallback_layers = []
 
-    try:
-
-        layers_list = list(
-            model.layers
-        )
-
-    except Exception:
-
-        return None
-
-    # --------------------------------------------------------
-    # Search in reverse because the deepest convolutional
-    # feature layer is normally the best Grad-CAM target.
-    # --------------------------------------------------------
-
     for layer in reversed(
-        layers_list
+        model.layers
     ):
 
         if not _is_4d_feature_layer(
@@ -1219,8 +1183,17 @@ def _find_deepest_conv_layer(
 
             continue
 
-        if _is_convolutional_layer(
-            layer
+        class_name = (
+            layer.__class__.__name__
+            .lower()
+        )
+
+        if (
+            "conv2d" in class_name
+            or
+            "separableconv" in class_name
+            or
+            "depthwiseconv" in class_name
         ):
 
             preferred_layers.append(
@@ -1245,138 +1218,99 @@ def _find_deepest_conv_layer(
 
 
 # ============================================================
-# RECURSIVE MODEL SEARCH
+# FIND TARGET LAYER
 # ============================================================
 
-def _find_best_feature_layer_recursive(
+def find_gradcam_target_layer(
     model
 ):
 
     # --------------------------------------------------------
-    # First search the current model itself.
+    # 1. Direct outer model.
     # --------------------------------------------------------
 
-    target = _find_deepest_conv_layer(
+    target_layer = _find_deepest_conv_layer(
         model
     )
 
-    if target is not None:
+    if target_layer is not None:
 
-        return target
+        return target_layer
+
 
     # --------------------------------------------------------
-    # Then search nested models.
+    # 2. Nested Xception.
     # --------------------------------------------------------
 
-    try:
+    xception_backbone = (
+        _find_xception_backbone(
+            model
+        )
+    )
 
-        layers_list = list(
-            model.layers
+    if xception_backbone is not None:
+
+        target_layer = (
+            _find_deepest_conv_layer(
+                xception_backbone
+            )
         )
 
-    except Exception:
+        if target_layer is not None:
 
-        return None
+            return target_layer
 
-    for layer in reversed(
-        layers_list
+
+    # --------------------------------------------------------
+    # 3. Recursive nested models.
+    # --------------------------------------------------------
+
+    def recursive_search(
+        current_model
     ):
 
-        if isinstance(
-            layer,
-            tf.keras.Model
+        for layer in reversed(
+            current_model.layers
         ):
 
-            target = (
-                _find_best_feature_layer_recursive(
+            if isinstance(
+                layer,
+                tf.keras.Model
+            ):
+
+                target = (
+                    _find_deepest_conv_layer(
+                        layer
+                    )
+                )
+
+                if target is not None:
+
+                    return target
+
+                target = recursive_search(
                     layer
                 )
-            )
 
-            if target is not None:
+                if target is not None:
 
-                return target
-
-    return None
-
-
-# ============================================================
-# FIND NESTED XCEPTION
-# ============================================================
-
-def _find_xception_backbone(
-    model
-):
-
-    # --------------------------------------------------------
-    # Direct search
-    # --------------------------------------------------------
-
-    try:
-
-        layers_list = list(
-            model.layers
-        )
-
-    except Exception:
+                    return target
 
         return None
 
-    for layer in layers_list:
+    target_layer = recursive_search(
+        model
+    )
 
-        class_name = (
-            layer.__class__.__name__
-            .lower()
-        )
+    if target_layer is not None:
 
-        layer_name = (
-            getattr(
-                layer,
-                "name",
-                ""
-            )
-            .lower()
-        )
+        return target_layer
 
-        combined = (
-            class_name
-            + " "
-            + layer_name
-        )
 
-        if (
-            "xception" in combined
-            and
-            isinstance(
-                layer,
-                tf.keras.Model
-            )
-        ):
-
-            return layer
-
-    # --------------------------------------------------------
-    # Recursive search
-    # --------------------------------------------------------
-
-    for layer in layers_list:
-
-        if isinstance(
-            layer,
-            tf.keras.Model
-        ):
-
-            found = (
-                _find_xception_backbone(
-                    layer
-                )
-            )
-
-            if found is not None:
-
-                return found
-
-    return None
+    raise ValueError(
+        "Grad-CAM++ could not find a suitable "
+        "4-D convolutional feature layer."
+    )
 
 
 # ============================================================
@@ -1388,21 +1322,7 @@ def _find_parent_model_for_layer(
     target_layer
 ):
 
-    if target_layer is None:
-
-        return None
-
-    try:
-
-        layers_list = list(
-            model.layers
-        )
-
-    except Exception:
-
-        return None
-
-    for layer in layers_list:
+    for layer in model.layers:
 
         if layer is target_layer:
 
@@ -1428,101 +1348,19 @@ def _find_parent_model_for_layer(
 
 
 # ============================================================
-# FIND GRAD-CAM TARGET LAYER
+# FIND OUTERMOST NESTED BACKBONE
 # ============================================================
 
-def find_gradcam_target_layer(
-    model
-):
-
-    # --------------------------------------------------------
-    # 1. Search top-level model.
-    # --------------------------------------------------------
-
-    target_layer = (
-        _find_deepest_conv_layer(
-            model
-        )
-    )
-
-    if target_layer is not None:
-
-        return target_layer
-
-    # --------------------------------------------------------
-    # 2. Search Xception specifically.
-    # --------------------------------------------------------
-
-    xception = (
-        _find_xception_backbone(
-            model
-        )
-    )
-
-    if xception is not None:
-
-        target_layer = (
-            _find_deepest_conv_layer(
-                xception
-            )
-        )
-
-        if target_layer is not None:
-
-            return target_layer
-
-    # --------------------------------------------------------
-    # 3. Recursive search.
-    # --------------------------------------------------------
-
-    target_layer = (
-        _find_best_feature_layer_recursive(
-            model
-        )
-    )
-
-    if target_layer is not None:
-
-        return target_layer
-
-    raise ValueError(
-        "Grad-CAM++ could not find a suitable "
-        "4-D convolutional feature layer in the "
-        "pneumonia model.\n\n"
-        "The loaded pneumonia model does not expose "
-        "an intermediate convolutional feature map "
-        "that can be used for Grad-CAM++."
-    )
-
-
-# ============================================================
-# FIND NESTED MODEL PATH
-# ============================================================
-
-def _find_nested_model_containing_layer(
+def _find_model_containing_layer(
     model,
     target_layer
 ):
 
-    if target_layer is None:
+    if target_layer in model.layers:
 
-        return None
+        return model
 
-    try:
-
-        layers_list = list(
-            model.layers
-        )
-
-    except Exception:
-
-        return None
-
-    for layer in layers_list:
-
-        if layer is target_layer:
-
-            return model
+    for layer in model.layers:
 
         if isinstance(
             layer,
@@ -1530,7 +1368,7 @@ def _find_nested_model_containing_layer(
         ):
 
             found = (
-                _find_nested_model_containing_layer(
+                _find_model_containing_layer(
                     layer,
                     target_layer
                 )
@@ -1544,100 +1382,10 @@ def _find_nested_model_containing_layer(
 
 
 # ============================================================
-# APPLY CLASSIFICATION HEAD
-# ============================================================
-
-def _apply_layers_after_backbone(
-    outer_model,
-    backbone_layer,
-    backbone_output
-):
-    """
-    Reconstructs the outer classification head.
-
-    Example:
-
-        Xception
-           ↓
-        GlobalAveragePooling2D
-           ↓
-        Dense
-           ↓
-        Dense(2)
-
-    The same operations are applied to backbone_output,
-    keeping everything inside one TensorFlow gradient graph.
-    """
-
-    try:
-
-        layers_list = list(
-            outer_model.layers
-        )
-
-    except Exception:
-
-        return None
-
-    try:
-
-        backbone_index = layers_list.index(
-            backbone_layer
-        )
-
-    except ValueError:
-
-        return None
-
-    current = backbone_output
-
-    # --------------------------------------------------------
-    # Apply layers following the nested backbone.
-    # --------------------------------------------------------
-
-    for layer in layers_list[
-        backbone_index + 1:
-    ]:
-
-        # Skip InputLayer.
-        if isinstance(
-            layer,
-            tf.keras.layers.InputLayer
-        ):
-
-            continue
-
-        try:
-
-            current = layer(
-                current,
-                training=False
-            )
-
-        except TypeError:
-
-            try:
-
-                current = layer(
-                    current
-                )
-
-            except Exception:
-
-                return None
-
-        except Exception:
-
-            return None
-
-    return current
-
-
-# ============================================================
 # BUILD FLAT GRAD-CAM MODEL
 # ============================================================
 
-def _build_flat_gradcam_model(
+def _try_build_flat_gradcam_model(
     model,
     target_layer
 ):
@@ -1660,30 +1408,16 @@ def _build_flat_gradcam_model(
 
 
 # ============================================================
-# BUILD NESTED GRAD-CAM MODEL
+# BUILD NESTED XCEPTION GRAD-CAM PATH
 # ============================================================
 
-def _build_nested_gradcam_model(
+def _build_nested_gradcam_path(
     model,
     target_layer
 ):
-    """
-    Builds a differentiable Grad-CAM model for a nested
-    Xception backbone.
-
-    The critical point is that both:
-
-        target convolutional activation
-
-    and
-
-        final pneumonia prediction
-
-    are calculated from the same forward graph.
-    """
 
     parent_model = (
-        _find_nested_model_containing_layer(
+        _find_parent_model_for_layer(
             model,
             target_layer
         )
@@ -1691,138 +1425,308 @@ def _build_nested_gradcam_model(
 
     if parent_model is None:
 
-        return None
+        raise ValueError(
+            "Could not find the model containing "
+            "the selected Grad-CAM++ layer."
+        )
 
     # --------------------------------------------------------
-    # If target is directly in the outer model, the normal
-    # Functional construction should be used.
+    # If parent is itself the outer model, normal graph should
+    # have worked.
     # --------------------------------------------------------
 
     if parent_model is model:
 
-        return None
+        raise ValueError(
+            "The selected feature layer belongs directly "
+            "to the outer model but its graph could not "
+            "be reconstructed."
+        )
 
     # --------------------------------------------------------
-    # The target layer is inside the nested backbone.
-    # We need the nested backbone output and target activation.
+    # Feature model:
+    #
+    # Xception input
+    #       ↓
+    # target convolution
+    #       ↓
+    # Xception output
     # --------------------------------------------------------
 
     try:
 
-        nested_probe = tf.keras.models.Model(
+        feature_model = tf.keras.models.Model(
             inputs=parent_model.inputs,
             outputs=[
                 target_layer.output,
                 parent_model.output
-            ]
+            ],
+            name="gradcam_feature_model"
+        )
+
+    except Exception as e:
+
+        raise ValueError(
+            "Could not construct the nested Xception "
+            "feature model.\n\n"
+            f"Original error:\n{e}"
+        ) from e
+
+    # --------------------------------------------------------
+    # Classification head.
+    #
+    # parent_model.output
+    #          ↓
+    # remaining layers
+    #          ↓
+    # pneumonia output
+    #
+    # This is required because calculating the gradient
+    # directly through a detached nested model can fail.
+    # --------------------------------------------------------
+
+    try:
+
+        head_model = tf.keras.models.Model(
+            inputs=parent_model.output,
+            outputs=model.output,
+            name="gradcam_classification_head"
         )
 
     except Exception:
 
-        return None
+        head_model = None
 
-    return {
-        "type": "nested",
-        "outer_model": model,
-        "parent_model": parent_model,
-        "nested_probe": nested_probe
-    }
+    return (
+        parent_model,
+        feature_model,
+        head_model
+    )
 
 
 # ============================================================
-# BUILD GRAD-CAM++ MODEL
+# GRAD-CAM++ CALCULATION — FLAT MODEL
 # ============================================================
 
-def _build_gradcam_model(
+def _gradcam_pp_flat(
     model,
-    target_layer
+    target_layer,
+    image_tensor,
+    target_class_index
 ):
 
-    # --------------------------------------------------------
-    # First try normal flat Functional construction.
-    # --------------------------------------------------------
-
-    flat_model = (
-        _build_flat_gradcam_model(
+    grad_model = (
+        _try_build_flat_gradcam_model(
             model,
             target_layer
         )
     )
 
-    if flat_model is not None:
+    if grad_model is None:
 
-        # Test it before accepting it.
-        try:
+        raise RuntimeError(
+            "The pneumonia model contains a feature layer "
+            "but its Grad-CAM graph could not be constructed."
+        )
 
-            dummy = tf.zeros(
-                (
-                    1,
-                    PNEUMONIA_IMAGE_SIZE[0],
-                    PNEUMONIA_IMAGE_SIZE[1],
-                    3
-                ),
-                dtype=tf.float32
-            )
+    with tf.GradientTape(
+        persistent=True
+    ) as tape3:
 
-            result = flat_model(
-                dummy,
-                training=False
-            )
+        with tf.GradientTape(
+            persistent=True
+        ) as tape2:
 
-            if (
-                isinstance(
-                    result,
-                    (list, tuple)
+            with tf.GradientTape(
+                persistent=True
+            ) as tape1:
+
+                conv_features, predictions = (
+                    grad_model(
+                        image_tensor,
+                        training=False
+                    )
                 )
-                and
-                len(result) == 2
-            ):
 
-                return flat_model
+                tape1.watch(
+                    conv_features
+                )
 
-        except Exception:
+                class_score = (
+                    predictions[
+                        :,
+                        target_class_index
+                    ]
+                )
 
-            pass
+            first_derivative = (
+                tape1.gradient(
+                    class_score,
+                    conv_features
+                )
+            )
 
-    # --------------------------------------------------------
-    # Try nested Xception.
-    # --------------------------------------------------------
+        second_derivative = (
+            tape2.gradient(
+                first_derivative,
+                conv_features
+            )
+        )
 
-    nested_model = (
-        _build_nested_gradcam_model(
-            model,
-            target_layer
+    third_derivative = (
+        tape3.gradient(
+            second_derivative,
+            conv_features
         )
     )
 
-    if nested_model is not None:
+    del tape1
+    del tape2
+    del tape3
 
-        return nested_model
-
-    raise ValueError(
-        "Unable to construct a differentiable "
-        "Grad-CAM++ model for the loaded pneumonia model.\n\n"
-        f"Target layer: {target_layer.name}\n\n"
-        "The model architecture may contain a custom "
-        "or disconnected classification head."
+    return (
+        conv_features,
+        first_derivative,
+        second_derivative,
+        third_derivative
     )
 
 
 # ============================================================
-# GRAD-CAM++ WEIGHTS
+# GRAD-CAM++ CALCULATION — NESTED XCEPTION
 # ============================================================
 
-def _calculate_gradcam_pp_weights(
+def _gradcam_pp_nested(
+    model,
+    target_layer,
+    image_tensor,
+    target_class_index
+):
+
+    (
+        parent_model,
+        feature_model,
+        head_model
+    ) = _build_nested_gradcam_path(
+        model,
+        target_layer
+    )
+
+    # --------------------------------------------------------
+    # The image first enters the nested Xception model.
+    # --------------------------------------------------------
+
+    with tf.GradientTape(
+        persistent=True
+    ) as tape3:
+
+        with tf.GradientTape(
+            persistent=True
+        ) as tape2:
+
+            with tf.GradientTape(
+                persistent=True
+            ) as tape1:
+
+                (
+                    conv_features,
+                    backbone_output
+                ) = feature_model(
+                    image_tensor,
+                    training=False
+                )
+
+                tape1.watch(
+                    conv_features
+                )
+
+                # ------------------------------------------------
+                # If a usable classification head can be built,
+                # use it.
+                # ------------------------------------------------
+
+                if head_model is not None:
+
+                    predictions = head_model(
+                        backbone_output,
+                        training=False
+                    )
+
+                else:
+
+                    # ------------------------------------------------
+                    # Fallback:
+                    # run the complete original model.
+                    # ------------------------------------------------
+
+                    predictions = model(
+                        image_tensor,
+                        training=False
+                    )
+
+                if (
+                    isinstance(
+                        predictions,
+                        (list, tuple)
+                    )
+                ):
+
+                    predictions = predictions[0]
+
+                class_score = (
+                    predictions[
+                        :,
+                        target_class_index
+                    ]
+                )
+
+            first_derivative = (
+                tape1.gradient(
+                    class_score,
+                    conv_features
+                )
+            )
+
+        second_derivative = (
+            tape2.gradient(
+                first_derivative,
+                conv_features
+            )
+        )
+
+    third_derivative = (
+        tape3.gradient(
+            second_derivative,
+            conv_features
+        )
+    )
+
+    del tape1
+    del tape2
+    del tape3
+
+    return (
+        conv_features,
+        first_derivative,
+        second_derivative,
+        third_derivative
+    )
+
+
+# ============================================================
+# CALCULATE GRAD-CAM++ WEIGHTS
+# ============================================================
+
+def _calculate_gradcam_plus_plus_heatmap(
     conv_features,
     first_derivative,
     second_derivative,
     third_derivative
 ):
 
-    epsilon = tf.constant(
-        1e-8,
-        dtype=tf.float32
-    )
+    # --------------------------------------------------------
+    # Safety conversion.
+    # --------------------------------------------------------
 
     conv_features = tf.cast(
         conv_features,
@@ -1844,14 +1748,23 @@ def _calculate_gradcam_pp_weights(
         tf.float32
     )
 
+    epsilon = tf.constant(
+        1e-8,
+        dtype=tf.float32
+    )
+
     # --------------------------------------------------------
-    # Grad-CAM++ alpha calculation
+    # Positive second derivative.
     # --------------------------------------------------------
 
     positive_second = tf.maximum(
         second_derivative,
         0.0
     )
+
+    # --------------------------------------------------------
+    # Grad-CAM++ alpha.
+    # --------------------------------------------------------
 
     denominator = (
         2.0 * positive_second
@@ -1868,51 +1781,508 @@ def _calculate_gradcam_pp_weights(
         )
     )
 
+    # --------------------------------------------------------
+    # Positive first gradients.
+    # --------------------------------------------------------
+
     positive_gradients = tf.maximum(
         first_derivative,
         0.0
     )
+
+    # --------------------------------------------------------
+    # Channel weights.
+    # --------------------------------------------------------
 
     weights = tf.reduce_sum(
         alpha * positive_gradients,
         axis=(1, 2)
     )
 
-    return weights
+    # --------------------------------------------------------
+    # Weighted feature maps.
+    # --------------------------------------------------------
+
+    weighted_features = (
+        conv_features
+        *
+        weights[
+            :,
+            tf.newaxis,
+            tf.newaxis,
+            :
+        ]
+    )
+
+    # --------------------------------------------------------
+    # Collapse channels.
+    # --------------------------------------------------------
+
+    heatmap = tf.reduce_sum(
+        weighted_features,
+        axis=-1
+    )
+
+    # --------------------------------------------------------
+    # Keep positive activations.
+    # --------------------------------------------------------
+
+    heatmap = tf.maximum(
+        heatmap,
+        0.0
+    )
+
+    heatmap = heatmap[0]
+
+    heatmap = heatmap.numpy()
+
+    heatmap = np.nan_to_num(
+        heatmap,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
+    # --------------------------------------------------------
+    # Percentile normalization.
+    #
+    # This is important because raw Grad-CAM++ values often
+    # contain a very small number of extreme activations.
+    # Simple max normalization can therefore make the rest
+    # of the highlighted area almost invisible.
+    # --------------------------------------------------------
+
+    positive_values = heatmap[
+        heatmap > 0
+    ]
+
+    if positive_values.size > 0:
+
+        low_value = np.percentile(
+            positive_values,
+            GRADCAM_LOW_PERCENTILE
+        )
+
+        high_value = np.percentile(
+            positive_values,
+            GRADCAM_HIGH_PERCENTILE
+        )
+
+        if high_value > low_value:
+
+            heatmap = (
+                heatmap - low_value
+            ) / (
+                high_value - low_value
+            )
+
+        else:
+
+            heatmap = (
+                heatmap
+                /
+                (
+                    np.max(
+                        heatmap
+                    )
+                    + 1e-8
+                )
+            )
+
+    else:
+
+        heatmap = np.zeros_like(
+            heatmap,
+            dtype=np.float32
+        )
+
+    heatmap = np.clip(
+        heatmap,
+        0.0,
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # Gamma enhancement.
+    #
+    # Values are slightly expanded so moderately strong
+    # regions become easier to see.
+    # --------------------------------------------------------
+
+    heatmap = np.power(
+        heatmap,
+        0.75
+    )
+
+    # --------------------------------------------------------
+    # Suppress extremely weak activations.
+    # --------------------------------------------------------
+
+    heatmap[
+        heatmap
+        <
+        GRADCAM_ACTIVATION_THRESHOLD
+    ] = 0.0
+
+    # --------------------------------------------------------
+    # Final normalization.
+    # --------------------------------------------------------
+
+    maximum = np.max(
+        heatmap
+    )
+
+    if maximum > 0:
+
+        heatmap /= (
+            maximum
+            + 1e-8
+        )
+
+    return heatmap.astype(
+        np.float32
+    )
 
 
 # ============================================================
-# GENERATE GRAD-CAM++ HEATMAP
+# CREATE ENHANCED GRAD-CAM++ VISUALIZATION
+# ============================================================
+
+def create_gradcam_overlay(
+    original_image,
+    heatmap
+):
+
+    # ========================================================
+    # ORIGINAL IMAGE
+    # ========================================================
+
+    original = ImageOps.exif_transpose(
+        original_image
+    ).convert(
+        "RGB"
+    )
+
+    original = original.resize(
+        GRADCAM_IMAGE_SIZE,
+        Image.Resampling.LANCZOS
+    )
+
+    original_array = np.asarray(
+        original,
+        dtype=np.float32
+    ) / 255.0
+
+
+    # ========================================================
+    # RESIZE HEATMAP
+    # ========================================================
+
+    heatmap_image = Image.fromarray(
+        np.uint8(
+            np.clip(
+                heatmap,
+                0.0,
+                1.0
+            )
+            * 255
+        ),
+        mode="L"
+    )
+
+    heatmap_image = heatmap_image.resize(
+        GRADCAM_IMAGE_SIZE,
+        Image.Resampling.BICUBIC
+    )
+
+    # --------------------------------------------------------
+    # Smooth heatmap slightly.
+    # --------------------------------------------------------
+
+    if GRADCAM_SMOOTHING_RADIUS > 0:
+
+        heatmap_image = (
+            heatmap_image.filter(
+                ImageFilter.GaussianBlur(
+                    radius=GRADCAM_SMOOTHING_RADIUS
+                )
+            )
+        )
+
+    heatmap_array = (
+        np.asarray(
+            heatmap_image,
+            dtype=np.float32
+        )
+        / 255.0
+    )
+
+    heatmap_array = np.clip(
+        heatmap_array,
+        0.0,
+        1.0
+    )
+
+
+    # ========================================================
+    # RE-THRESHOLD AFTER RESIZING
+    # ========================================================
+
+    heatmap_array[
+        heatmap_array
+        <
+        GRADCAM_ACTIVATION_THRESHOLD
+    ] = 0.0
+
+
+    # ========================================================
+    # CREATE COLOR HEATMAP
+    #
+    # Manual red/yellow mapping:
+    #
+    # low activation  → transparent/dark
+    # medium          → yellow
+    # high            → red
+    # ========================================================
+
+    heatmap_rgb = np.zeros(
+        (
+            GRADCAM_IMAGE_SIZE[1],
+            GRADCAM_IMAGE_SIZE[0],
+            3
+        ),
+        dtype=np.float32
+    )
+
+    # --------------------------------------------------------
+    # Red channel.
+    # --------------------------------------------------------
+
+    heatmap_rgb[:, :, 0] = np.clip(
+        heatmap_array * 1.8,
+        0.0,
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # Green channel.
+    #
+    # Medium activation becomes yellow.
+    # Strong activation gradually becomes red.
+    # --------------------------------------------------------
+
+    heatmap_rgb[:, :, 1] = np.clip(
+        heatmap_array * 2.2
+        -
+        np.power(
+            heatmap_array,
+            2.0
+        ) * 1.6,
+        0.0,
+        1.0
+    )
+
+    # --------------------------------------------------------
+    # Blue channel remains low to make the localization
+    # visually warm and obvious.
+    # --------------------------------------------------------
+
+    heatmap_rgb[:, :, 2] = np.clip(
+        0.35
+        *
+        (
+            1.0
+            -
+            heatmap_array
+        ),
+        0.0,
+        1.0
+    )
+
+
+    # ========================================================
+    # CREATE STRONGER ALPHA MASK
+    # ========================================================
+
+    alpha_mask = np.clip(
+        (
+            heatmap_array
+            -
+            GRADCAM_ACTIVATION_THRESHOLD
+        )
+        /
+        (
+            1.0
+            -
+            GRADCAM_ACTIVATION_THRESHOLD
+            +
+            1e-8
+        ),
+        0.0,
+        1.0
+    )
+
+    # Stronger visibility.
+    alpha_mask = np.power(
+        alpha_mask,
+        0.65
+    )
+
+    alpha_mask *= (
+        GRADCAM_OVERLAY_ALPHA
+    )
+
+
+    # ========================================================
+    # BLEND HEATMAP WITH ORIGINAL IMAGE
+    # ========================================================
+
+    overlay_array = (
+        original_array
+        *
+        (
+            1.0
+            -
+            alpha_mask[:, :, np.newaxis]
+        )
+        +
+        heatmap_rgb
+        *
+        alpha_mask[:, :, np.newaxis]
+    )
+
+
+    # ========================================================
+    # ADD STRONG-ACTIVATION BOUNDARY
+    #
+    # This makes the localization easier to visually identify.
+    # ========================================================
+
+    strong_mask = (
+        heatmap_array
+        >=
+        0.55
+    )
+
+    boundary = np.zeros_like(
+        strong_mask,
+        dtype=bool
+    )
+
+    boundary[1:, :] |= (
+        strong_mask[1:, :]
+        !=
+        strong_mask[:-1, :]
+    )
+
+    boundary[:, 1:] |= (
+        strong_mask[:, 1:]
+        !=
+        strong_mask[:, :-1]
+    )
+
+    # Slightly expand the boundary.
+    boundary_expanded = boundary.copy()
+
+    boundary_expanded[:-1, :] |= boundary[1:, :]
+    boundary_expanded[1:, :] |= boundary[:-1, :]
+    boundary_expanded[:, :-1] |= boundary[:, 1:]
+    boundary_expanded[:, 1:] |= boundary[:, :-1]
+
+    # Use a bright yellow boundary.
+    overlay_array[
+        boundary_expanded
+    ] = np.array(
+        [
+            1.0,
+            0.85,
+            0.0
+        ],
+        dtype=np.float32
+    )
+
+
+    # ========================================================
+    # FINAL OVERLAY IMAGE
+    # ========================================================
+
+    overlay_array = np.clip(
+        overlay_array,
+        0.0,
+        1.0
+    )
+
+    overlay_image = Image.fromarray(
+        np.uint8(
+            overlay_array
+            * 255
+        ),
+        mode="RGB"
+    )
+
+
+    # ========================================================
+    # HEATMAP DISPLAY IMAGE
+    # ========================================================
+
+    heatmap_display = np.clip(
+        heatmap_rgb,
+        0.0,
+        1.0
+    )
+
+    heatmap_display[
+        heatmap_array <= 0.0
+    ] = np.array(
+        [
+            0.0,
+            0.0,
+            0.0
+        ],
+        dtype=np.float32
+    )
+
+    heatmap_display_image = Image.fromarray(
+        np.uint8(
+            heatmap_display
+            * 255
+        ),
+        mode="RGB"
+    )
+
+
+    # ========================================================
+    # RETURN
+    # ========================================================
+
+    return (
+        original,
+        heatmap_display_image,
+        overlay_image
+    )
+
+
+# ============================================================
+# GENERATE GRAD-CAM++
 # ============================================================
 
 def generate_gradcam_plus_plus(
     image,
     target_class_index=1
 ):
-    """
-    Generate Grad-CAM++ from the existing pneumonia model.
-
-    Mapping:
-
-        0 = Normal
-        1 = Pneumonia
-
-    This function is only called when Pneumonia is detected.
-    """
 
     # ========================================================
     # FIND TARGET LAYER
     # ========================================================
 
-    target_layer = (
-        find_gradcam_target_layer(
-            pneumonia_model
-        )
+    target_layer = find_gradcam_target_layer(
+        pneumonia_model
     )
 
     target_layer_name = (
         target_layer.name
     )
+
 
     # ========================================================
     # PREPROCESS
@@ -1928,261 +2298,57 @@ def generate_gradcam_plus_plus(
         dtype=tf.float32
     )
 
+
     # ========================================================
-    # BUILD GRAD-CAM MODEL
+    # TRY NORMAL FLAT GRAPH FIRST
     # ========================================================
 
-    gradcam_model = (
-        _build_gradcam_model(
+    try:
+
+        (
+            conv_features,
+            first_derivative,
+            second_derivative,
+            third_derivative
+        ) = _gradcam_pp_flat(
             pneumonia_model,
-            target_layer
+            target_layer,
+            image_tensor,
+            target_class_index
         )
-    )
 
-    # ========================================================
-    # FLAT FUNCTIONAL MODEL
-    # ========================================================
+    except Exception as flat_error:
 
-    if isinstance(
-        gradcam_model,
-        tf.keras.Model
-    ):
+        # ====================================================
+        # NESTED XCEPTION FALLBACK
+        # ====================================================
 
-        with tf.GradientTape(
-            persistent=True
-        ) as tape3:
+        try:
 
-            with tf.GradientTape(
-                persistent=True
-            ) as tape2:
-
-                with tf.GradientTape(
-                    persistent=True
-                ) as tape1:
-
-                    conv_features, predictions = (
-                        gradcam_model(
-                            image_tensor,
-                            training=False
-                        )
-                    )
-
-                    # ----------------------------------------
-                    # Ensure predictions are 2-class output.
-                    # ----------------------------------------
-
-                    if (
-                        predictions.shape.rank != 2
-                        or
-                        predictions.shape[-1] != 2
-                    ):
-
-                        raise RuntimeError(
-                            "Grad-CAM++ received an unexpected "
-                            "pneumonia model output shape: "
-                            f"{predictions.shape}"
-                        )
-
-                    class_score = (
-                        predictions[
-                            :,
-                            target_class_index
-                        ]
-                    )
-
-                first_derivative = (
-                    tape1.gradient(
-                        class_score,
-                        conv_features
-                    )
-                )
-
-            second_derivative = (
-                tape2.gradient(
-                    first_derivative,
-                    conv_features
-                )
-            )
-
-        third_derivative = (
-            tape3.gradient(
+            (
+                conv_features,
+                first_derivative,
                 second_derivative,
-                conv_features
-            )
-        )
-
-        del tape1
-        del tape2
-        del tape3
-
-    # ========================================================
-    # NESTED XCEPTION MODEL
-    # ========================================================
-
-    else:
-
-        nested_probe = (
-            gradcam_model[
-                "nested_probe"
-            ]
-        )
-
-        parent_model = (
-            gradcam_model[
-                "parent_model"
-            ]
-        )
-
-        outer_model = (
-            gradcam_model[
-                "outer_model"
-            ]
-        )
-
-        # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # We do NOT calculate:
-        #
-        #   nested_features = probe(image)
-        #   prediction = outer_model(image)
-        #
-        # separately.
-        #
-        # Instead, the nested backbone is executed inside
-        # GradientTape and its output is passed through the
-        # outer classification head in the SAME graph.
-        # ----------------------------------------------------
-
-        with tf.GradientTape(
-            persistent=True
-        ) as tape3:
-
-            with tf.GradientTape(
-                persistent=True
-            ) as tape2:
-
-                with tf.GradientTape(
-                    persistent=True
-                ) as tape1:
-
-                    # ----------------------------------------
-                    # Execute nested backbone.
-                    # ----------------------------------------
-
-                    nested_outputs = (
-                        parent_model(
-                            image_tensor,
-                            training=False
-                        )
-                    )
-
-                    # ----------------------------------------
-                    # Get target convolution activation.
-                    #
-                    # We use the target layer's own output
-                    # through a nested probe.
-                    # ----------------------------------------
-
-                    probe_outputs = (
-                        nested_probe(
-                            image_tensor,
-                            training=False
-                        )
-                    )
-
-                    conv_features = (
-                        probe_outputs[0]
-                    )
-
-                    backbone_output = (
-                        nested_outputs
-                    )
-
-                    # ----------------------------------------
-                    # Reconstruct outer classification head.
-                    # ----------------------------------------
-
-                    predictions = (
-                        _apply_layers_after_backbone(
-                            outer_model,
-                            parent_model,
-                            backbone_output
-                        )
-                    )
-
-                    # ----------------------------------------
-                    # If the outer head cannot be reconstructed,
-                    # try using the nested model as a direct
-                    # classification model.
-                    # ----------------------------------------
-
-                    if predictions is None:
-
-                        # This path is useful when the nested
-                        # model itself contains the classifier.
-                        predictions = (
-                            parent_model(
-                                image_tensor,
-                                training=False
-                            )
-                        )
-
-                    # ----------------------------------------
-                    # Validate output.
-                    # ----------------------------------------
-
-                    if predictions is None:
-
-                        raise RuntimeError(
-                            "Could not obtain the final "
-                            "pneumonia prediction from the "
-                            "nested Xception architecture."
-                        )
-
-                    if (
-                        predictions.shape.rank != 2
-                        or
-                        predictions.shape[-1] != 2
-                    ):
-
-                        raise RuntimeError(
-                            "Nested Grad-CAM++ reconstruction "
-                            "produced an unexpected output shape: "
-                            f"{predictions.shape}"
-                        )
-
-                    class_score = (
-                        predictions[
-                            :,
-                            target_class_index
-                        ]
-                    )
-
-                first_derivative = (
-                    tape1.gradient(
-                        class_score,
-                        conv_features
-                    )
-                )
-
-            second_derivative = (
-                tape2.gradient(
-                    first_derivative,
-                    conv_features
-                )
+                third_derivative
+            ) = _gradcam_pp_nested(
+                pneumonia_model,
+                target_layer,
+                image_tensor,
+                target_class_index
             )
 
-        third_derivative = (
-            tape3.gradient(
-                second_derivative,
-                conv_features
-            )
-        )
+        except Exception as nested_error:
 
-        del tape1
-        del tape2
-        del tape3
+            raise RuntimeError(
+                "Grad-CAM++ could not be generated "
+                "from the pneumonia model.\n\n"
+                f"Target layer: {target_layer_name}\n\n"
+                "Flat model attempt:\n"
+                f"{flat_error}\n\n"
+                "Nested Xception attempt:\n"
+                f"{nested_error}"
+            ) from nested_error
+
 
     # ========================================================
     # GRADIENT VALIDATION
@@ -2192,17 +2358,15 @@ def generate_gradcam_plus_plus(
 
         raise RuntimeError(
             "Grad-CAM++ could not calculate the first "
-            "gradient.\n\n"
-            f"Target layer: {target_layer_name}\n\n"
-            "The selected feature map is not connected "
-            "to the requested classification output."
+            "gradient for the selected feature layer.\n\n"
+            f"Target layer: {target_layer_name}"
         )
 
     if second_derivative is None:
 
         raise RuntimeError(
             "Grad-CAM++ could not calculate the second "
-            "gradient.\n\n"
+            "gradient for the selected feature layer.\n\n"
             f"Target layer: {target_layer_name}"
         )
 
@@ -2210,33 +2374,17 @@ def generate_gradcam_plus_plus(
 
         raise RuntimeError(
             "Grad-CAM++ could not calculate the third "
-            "gradient.\n\n"
+            "gradient for the selected feature layer.\n\n"
             f"Target layer: {target_layer_name}"
         )
 
-    # ========================================================
-    # VALIDATE FEATURE MAP
-    # ========================================================
-
-    if (
-        conv_features is None
-        or
-        _get_tensor_rank(
-            conv_features
-        ) != 4
-    ):
-
-        raise RuntimeError(
-            "The selected Grad-CAM++ feature layer did not "
-            "produce a 4-D tensor."
-        )
 
     # ========================================================
-    # CALCULATE WEIGHTS
+    # CALCULATE HEATMAP
     # ========================================================
 
-    weights = (
-        _calculate_gradcam_pp_weights(
+    heatmap = (
+        _calculate_gradcam_plus_plus_heatmap(
             conv_features,
             first_derivative,
             second_derivative,
@@ -2244,93 +2392,15 @@ def generate_gradcam_plus_plus(
         )
     )
 
-    # ========================================================
-    # WEIGHT FEATURE MAPS
-    # ========================================================
-
-    weighted_features = (
-        conv_features
-        *
-        weights[
-            :,
-            tf.newaxis,
-            tf.newaxis,
-            :
-        ]
-    )
-
-    heatmap = tf.reduce_sum(
-        weighted_features,
-        axis=-1
-    )
 
     # ========================================================
-    # RELU
+    # HEATMAP VALIDATION
     # ========================================================
 
-    heatmap = tf.maximum(
-        heatmap,
-        0.0
-    )
-
-    heatmap = heatmap[0]
-
-    # ========================================================
-    # NORMALIZE
-    # ========================================================
-
-    epsilon = tf.constant(
-        1e-8,
-        dtype=tf.float32
-    )
-
-    heatmap_max = tf.reduce_max(
-        heatmap
-    )
-
-    heatmap = tf.where(
-        heatmap_max > epsilon,
-        heatmap / (
-            heatmap_max
-            +
-            epsilon
-        ),
-        tf.zeros_like(
-            heatmap
-        )
-    )
-
-    # ========================================================
-    # CONVERT TO NUMPY
-    # ========================================================
-
-    heatmap = heatmap.numpy()
-
-    heatmap = np.nan_to_num(
-        heatmap,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
-
-    heatmap = np.clip(
-        heatmap,
-        0.0,
-        1.0
-    )
-
-    # ========================================================
-    # FINAL VALIDATION
-    # ========================================================
-
-    if (
-        heatmap.ndim != 2
-        or
-        heatmap.size == 0
-    ):
+    if heatmap is None:
 
         raise RuntimeError(
-            "Grad-CAM++ generated an invalid heatmap."
+            "Grad-CAM++ generated an empty heatmap."
         )
 
     if not np.any(
@@ -2338,202 +2408,20 @@ def generate_gradcam_plus_plus(
     ):
 
         raise RuntimeError(
-            "Grad-CAM++ generated an empty heatmap. "
-            "The selected feature layer may not be "
-            "connected to the pneumonia classification head."
+            "Grad-CAM++ generated a zero-valued "
+            "heatmap. The selected feature layer "
+            "did not produce usable positive activation "
+            "for the Pneumonia class."
         )
+
+
+    # ========================================================
+    # RETURN
+    # ========================================================
 
     return (
         heatmap,
         target_layer_name
-    )
-
-
-# ============================================================
-# CREATE GRAD-CAM++ OVERLAY
-# ============================================================
-
-def create_gradcam_overlay(
-    image,
-    heatmap
-):
-    """
-    Converts a Grad-CAM++ heatmap into:
-
-        1. Original resized image
-        2. Heatmap image
-        3. Heatmap overlay
-
-    No change is made to the model.
-    """
-
-    # ========================================================
-    # PREPARE ORIGINAL IMAGE
-    # ========================================================
-
-    original_image = ImageOps.exif_transpose(
-        image
-    ).convert(
-        "RGB"
-    )
-
-    original_gradcam_image = (
-        original_image.resize(
-            GRADCAM_IMAGE_SIZE,
-            Image.Resampling.LANCZOS
-        )
-    )
-
-    # ========================================================
-    # VALIDATE HEATMAP
-    # ========================================================
-
-    heatmap = np.asarray(
-        heatmap,
-        dtype=np.float32
-    )
-
-    heatmap = np.nan_to_num(
-        heatmap,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
-
-    heatmap = np.clip(
-        heatmap,
-        0.0,
-        1.0
-    )
-
-    # ========================================================
-    # RESIZE HEATMAP
-    # ========================================================
-
-    heatmap_image = Image.fromarray(
-        np.uint8(
-            heatmap * 255
-        ),
-        mode="L"
-    )
-
-    heatmap_image = (
-        heatmap_image.resize(
-            GRADCAM_IMAGE_SIZE,
-            Image.Resampling.BICUBIC
-        )
-    )
-
-    # ========================================================
-    # CREATE COLOR HEATMAP
-    # ========================================================
-
-    heatmap_array = np.asarray(
-        heatmap_image,
-        dtype=np.float32
-    ) / 255.0
-
-    # --------------------------------------------------------
-    # Jet-like color mapping without requiring matplotlib.
-    # --------------------------------------------------------
-
-    red = np.clip(
-        1.5 - np.abs(
-            4.0 * heatmap_array - 3.0
-        ),
-        0.0,
-        1.0
-    )
-
-    green = np.clip(
-        1.5 - np.abs(
-            4.0 * heatmap_array - 2.0
-        ),
-        0.0,
-        1.0
-    )
-
-    blue = np.clip(
-        1.5 - np.abs(
-            4.0 * heatmap_array - 1.0
-        ),
-        0.0,
-        1.0
-    )
-
-    colored_heatmap = np.stack(
-        [
-            red,
-            green,
-            blue
-        ],
-        axis=-1
-    )
-
-    colored_heatmap = np.uint8(
-        colored_heatmap * 255
-    )
-
-    heatmap_rgb = Image.fromarray(
-        colored_heatmap,
-        mode="RGB"
-    )
-
-    # ========================================================
-    # CREATE OVERLAY
-    # ========================================================
-
-    original_array = np.asarray(
-        original_gradcam_image,
-        dtype=np.float32
-    )
-
-    heatmap_rgb_array = np.asarray(
-        heatmap_rgb,
-        dtype=np.float32
-    )
-
-    alpha = (
-        GRADCAM_OVERLAY_ALPHA
-        *
-        heatmap_array[
-            :,
-            :,
-            np.newaxis
-        ]
-    )
-
-    overlay_array = (
-        original_array
-        *
-        (
-            1.0
-            -
-            alpha
-        )
-        +
-        heatmap_rgb_array
-        *
-        alpha
-    )
-
-    overlay_array = np.clip(
-        overlay_array,
-        0.0,
-        255.0
-    ).astype(
-        np.uint8
-    )
-
-    gradcam_overlay = Image.fromarray(
-        overlay_array,
-        mode="RGB"
-    )
-
-    return (
-        original_gradcam_image,
-        heatmap_rgb,
-        gradcam_overlay
     )
 
 
@@ -2997,9 +2885,8 @@ def create_pdf_report(
             story.append(
                 Paragraph(
                     "The highlighted region represents "
-                    "the areas of the chest X-ray that "
-                    "contributed most strongly to the "
-                    "Pneumonia prediction.",
+                    "areas of the chest X-ray associated "
+                    "with the Pneumonia prediction.",
                     normal_style
                 )
             )
@@ -3451,7 +3338,7 @@ if uploaded_file is not None:
 
 
             # =================================================
-            # STEP 6 — GRAD-CAM++
+            # STEP 6 — GRAD-CAM++ LOCALIZATION
             # =================================================
 
             gradcam_overlay = None
@@ -3465,17 +3352,16 @@ if uploaded_file is not None:
                 )
 
                 with st.spinner(
-                    "Generating Grad-CAM++ localization..."
+                    "Generating enhanced Grad-CAM++ localization..."
                 ):
 
                     try:
 
-                        (
-                            heatmap,
-                            gradcam_layer_name
-                        ) = generate_gradcam_plus_plus(
-                            image,
-                            target_class_index=1
+                        heatmap, gradcam_layer_name = (
+                            generate_gradcam_plus_plus(
+                                image,
+                                target_class_index=1
+                            )
                         )
 
                         (
@@ -3498,30 +3384,60 @@ if uploaded_file is not None:
 
                         gradcam_overlay = None
 
-                # ------------------------------------------------
+
+                # =================================================
                 # DISPLAY GRAD-CAM++ RESULT
-                # ------------------------------------------------
+                # =================================================
 
                 if gradcam_overlay is not None:
 
                     st.success(
-                        "Pneumonia localization generated "
-                        "using Grad-CAM++."
+                        "Enhanced Pneumonia localization "
+                        "generated using Grad-CAM++."
                     )
 
-                    st.image(
-                        gradcam_overlay,
-                        caption=(
-                            "Grad-CAM++ Pneumonia "
-                            "Localization"
-                        ),
-                        use_container_width=True
+                    # -------------------------------------------------
+                    # THREE-VIEW DISPLAY
+                    # -------------------------------------------------
+
+                    grad_col1, grad_col2, grad_col3 = st.columns(
+                        3
                     )
+
+                    with grad_col1:
+
+                        st.image(
+                            original_gradcam_image,
+                            caption="Original Chest X-ray",
+                            use_container_width=True
+                        )
+
+                    with grad_col2:
+
+                        st.image(
+                            heatmap_image,
+                            caption="Grad-CAM++ Activation Map",
+                            use_container_width=True
+                        )
+
+                    with grad_col3:
+
+                        st.image(
+                            gradcam_overlay,
+                            caption=(
+                                "Enhanced Grad-CAM++ "
+                                "Pneumonia Localization"
+                            ),
+                            use_container_width=True
+                        )
 
                     st.info(
-                        "Highlighted regions indicate areas "
-                        "that contributed strongly to the "
-                        "Pneumonia prediction."
+                        "Red and yellow highlighted regions "
+                        "represent areas that contributed more "
+                        "strongly to the Pneumonia prediction. "
+                        "The localization is an explainability "
+                        "visualization, not a clinical lesion "
+                        "segmentation."
                     )
 
 
